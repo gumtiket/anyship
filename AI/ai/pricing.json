@@ -1,0 +1,8 @@
+{
+  "_comment": "Bedrock 요금 페이지 확인 후 채울 것. models 키에 실제 호출 model_id/추론 프로필 ID를 사용한다. 단위: USD / 1M tokens.",
+  "models": {},
+  "_template": {
+    "input_usd_per_million": null,
+    "output_usd_per_million": null
+  }
+}

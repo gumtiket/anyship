@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bronze Todo</title>
+<style>
+body{font-family:system-ui;max-width:720px;margin:48px auto;padding:0 20px;background:#f6f7fb;color:#17243b}
+input,button{padding:10px;margin:4px;border:1px solid #bec8db;border-radius:6px}li{padding:10px;background:white;margin:8px 0}
+</style>
+<h1>Bronze Todo</h1>
+<p>배포 진단 실험용 앱 · 의도한 설정 위반이 있습니다.</p>
+<form id="form"><input id="title" placeholder="할 일" maxlength="200" required><input id="due" type="datetime-local"><button>추가</button></form>
+<button id="export">로컬 파일로 내보내기</button><p id="status" role="status"></p><ul id="todos"></ul>
+<script>
+const status=document.querySelector('#status');
+async function request(path,options={}){
+  const response=await fetch(path,options);
+  if(!response.ok)throw new Error(`요청 실패: ${response.status}`);
+  return response.status===204?null:response.json();
+}
+async function refresh(){
+  const rows=await request('/todos');const list=document.querySelector('#todos');list.replaceChildren();
+  for(const todo of rows){
+    const row=document.createElement('li');const title=document.createElement('span');
+    title.textContent=`${todo.done?'✓ ':''}${todo.title}${todo.overdue?' · 마감 지남':''}`;
+    row.append(title);
+    const edit=document.createElement('button');edit.textContent=todo.done?'다시 열기':'완료';
+    edit.onclick=()=>request(`/todos/${todo.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({...todo,done:!todo.done})}).then(refresh).catch(showError);
+    const del=document.createElement('button');del.textContent='삭제';
+    del.onclick=()=>request(`/todos/${todo.id}`,{method:'DELETE'}).then(refresh).catch(showError);
+    row.append(edit,del);list.append(row);
+  }
+}
+function showError(error){status.textContent=error.message;}
+document.querySelector('#form').onsubmit=async event=>{
+  event.preventDefault();try{
+    const due=document.querySelector('#due').value;
+    await request('/todos',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:document.querySelector('#title').value,due_at:due?new Date(due).toISOString():null})});
+    document.querySelector('#form').reset();await refresh();
+  }catch(error){showError(error);}
+};
+document.querySelector('#export').onclick=()=>request('/export',{method:'POST'}).then(result=>{status.textContent=`${result.file}에 저장했습니다.`;}).catch(showError);
+refresh().catch(showError);
+</script>
+</html>

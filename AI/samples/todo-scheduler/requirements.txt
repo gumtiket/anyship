@@ -1,0 +1,4 @@
+fastapi
+SQLAlchemy
+uvicorn
+APScheduler>=3.11,<4
