@@ -18,7 +18,8 @@ from sqlalchemy.exc import IntegrityError
 from .config import Settings
 from .db import CodeChange, DemoChange, LoginSession, Membership, OAuthAttempt, Project, RepositoryConnection, User, Workspace, database
 from .github_api import DemoGitHub, GitHubAPI, GitHubFailure
-from . import code_changes, demo_changes, onboarding
+from . import aws_onboarding, code_changes, demo_changes, onboarding
+from .aws_adapter import STSAdapter
 
 auth_logger = logging.getLogger("anyship.auth")
 
@@ -46,7 +47,7 @@ class DemoReviewInput(BaseModel):
     review_hash: str = Field(min_length=64, max_length=64)
 
 
-def create_app(settings: Settings, gateway=None):
+def create_app(settings: Settings, gateway=None, aws_adapter=None):
     engine, sessions = database(settings.database_url)
     cipher = Fernet(settings.token_key.encode() if settings.token_key else Fernet.generate_key())
     github = gateway or (DemoGitHub() if settings.demo else GitHubAPI())
@@ -108,6 +109,7 @@ def create_app(settings: Settings, gateway=None):
             raise HTTPException(401, "다시 로그인해 주세요.") from None
 
     app.include_router(onboarding.router(settings, github, db, current, mutation, access_token))
+    app.include_router(aws_onboarding.router(settings, aws_adapter if aws_adapter is not None else STSAdapter(), db, current, mutation))
 
     def installations(login):
         return github.installations(access_token(login))
@@ -152,6 +154,8 @@ def create_app(settings: Settings, gateway=None):
     @app.get("/api/config")
     def config():
         return {"demo": settings.demo, "github_configured": settings.github_configured,
+                "aws_available": settings.aws_configured,
+                "aws_regions": list(settings.aws_regions) if settings.aws_configured else [],
                 "ai_available": False, "ai_mode": settings.ai_mode, "demo_changes_available": settings.demo,
                 "callback_url": settings.app_origin + "/api/auth/github/callback"}
 
@@ -535,6 +539,11 @@ def create_app(settings: Settings, gateway=None):
 
     if (settings.frontend_dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=settings.frontend_dist / "assets"), name="assets")
+
+    @app.get("/dev/aws", include_in_schema=False)
+    def legacy_aws_page(environment: uuid.UUID | None = None):
+        route = "/#aws" + (f"/{environment}" if environment else "")
+        return RedirectResponse(route, status_code=307)
 
     @app.get("/")
     def index():

@@ -5,6 +5,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from sqlalchemy.engine import make_url
 
+from .aws_validation import validate_aws_settings
+
 DEFAULT_DATABASE_URL = "postgresql+psycopg://anyship@127.0.0.1:55432/anyship"
 
 
@@ -19,10 +21,17 @@ class Settings:
     demo: bool = False
     ai_mode: str = "unavailable"
     production: bool = False
+    aws_template_url: str = field(default="", repr=False)
+    aws_service_role_arn: str = ""
+    aws_regions: tuple[str, ...] = ()
+    aws_role_name: str = "deploy-service-role"
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
 
     def __post_init__(self):
+        validate_aws_settings(self.aws_template_url, self.aws_service_role_arn, self.aws_regions)
+        if not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", self.aws_role_name.replace("{id}", "0" * 32)):
+            raise ValueError("APP_AWS_ROLE_NAME must be an IAM role name, optionally containing {id}.")
         if self.ai_mode not in ("placeholder", "unavailable"):
             raise ValueError("APP_AI_MODE must be placeholder or unavailable.")
         if self.production and self.ai_mode == "placeholder":
@@ -38,6 +47,10 @@ class Settings:
             raise ValueError("APP_GITHUB_APP_SLUG must be a GitHub App slug.")
         if self.production and not self.github_configured:
             raise ValueError("Production requires GitHub App configuration.")
+
+    @property
+    def aws_configured(self):
+        return bool(self.aws_template_url and self.aws_service_role_arn and self.aws_regions) and not self.demo
 
     @property
     def github_configured(self):
@@ -59,4 +72,8 @@ class Settings:
             demo=os.getenv("APP_DEMO", "false").lower() == "true",
             ai_mode=os.getenv("APP_AI_MODE", "unavailable"),
             production=os.getenv("APP_ENV", "development") == "production",
+            aws_template_url=os.getenv("APP_AWS_TEMPLATE_URL", "").strip(),
+            aws_service_role_arn=os.getenv("APP_AWS_SERVICE_ROLE_ARN", "").strip(),
+            aws_regions=tuple(dict.fromkeys(r.strip() for r in os.getenv("APP_AWS_REGIONS", "").split(",") if r.strip())),
+            aws_role_name=os.getenv("APP_AWS_ROLE_NAME", "deploy-service-role").strip(),
         )

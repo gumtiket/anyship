@@ -1,6 +1,103 @@
 # AnyShip GitHub 모듈 사용 및 테스트 가이드
 
-AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안내](../docs/LOCAL_DEVELOPMENT.md)를 참고하세요. 아래는 독립적으로 사용할 수 있는 기존 CLI 모듈 안내입니다.
+AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안내](../docs/LOCAL_DEVELOPMENT.md)를 참고하세요. 아래는 AWS 환경 등록 API와 독립적으로 사용할 수 있는 GitHub 모듈의 안내입니다.
+
+## AWS 환경 등록 API
+
+Service가 CloudFormation 링크를 반환하면 프론트엔드는 `target="_blank"`, `rel="noopener noreferrer"`로 엽니다. 이용자는 AWS 콘솔에서 IAM 생성에 동의하고 스택의 `CREATE_COMPLETE`를 확인한 뒤 Outputs의 `RoleArn`을 서비스에 입력합니다. Service는 저장한 External ID로 역할을 검증하고 성공한 연결만 DB에 저장합니다. 기존 프론트엔드의 **AWS 환경** 메뉴에서 이 흐름을 실행합니다. AWS 콘솔의 자동 콜백은 사용하지 않습니다.
+
+### 브라우저에서 직접 테스트
+
+프론트엔드 변경 후 `frontend`에서 `pnpm build`를 실행합니다. 저장소 루트에서 기존 실행 도우미 `./scripts/start-local.ps1`을 실행하고 [AWS 환경](http://localhost:8000/#aws)을 엽니다. 도우미는 기존 로컬 PostgreSQL을 시작하고 마이그레이션을 적용합니다. 기존 로그인·프로젝트 데이터는 유지합니다. 이전 `/dev/aws` 주소도 같은 화면으로 이동합니다.
+
+1. 기존 Service에서 GitHub로 로그인하고 사이드바의 **AWS 환경**을 선택합니다. AWS 주소에서 로그인하면 인증 후 해당 화면으로 돌아옵니다.
+2. AWS 설정이 준비되면 이름과 리전을 선택하고 **등록 시작**을 누릅니다.
+3. **AWS에서 역할 생성**을 눌러 본인의 AWS 계정에서 스택을 생성합니다. 현재 Infra 템플릿은 `AdministratorAccess`를 부여합니다.
+4. `CREATE_COMPLETE`를 확인하고 Outputs의 `RoleArn`을 복사해 이전 탭에 붙여넣은 뒤 **연결 확인**을 누릅니다.
+5. 연결 완료 상태·계정 ID·저장된 ARN을 확인합니다. **상태 새로고침**이나 페이지 재접속 후에도 DB에서 조회됩니다. 실패 시 같은 환경에서 재시도할 수 있습니다.
+
+이 화면은 기존 로그인 세션, 실제 DB, 실제 STS 어댑터를 사용합니다. AWS 설정이 비어 있으면 연결 준비 안내와 함께 등록을 비활성화합니다. 아래 설정을 `.env.github.local`에 입력한 뒤 서버를 재시작하고 브라우저를 새로고침하세요. 로컬 실행에는 서비스 역할로 호출할 수 있는 AWS 프로필 등도 필요하며, 사용자 계정의 콘솔 로그인만으로 서버 인증이 되지는 않습니다.
+
+### 설정과 DB 준비
+
+Service 가상환경에 `python -m pip install -e ".[web,test]"`로 AWS SDK를 포함한 의존성을 설치합니다. 실제 서버에 적용할 때 기존 실행 설정 파일(`.env.github.local`) 또는 환경변수에 아래 값을 설정하고, 대상 DB를 확인한 후 Service 디렉터리에서 `python -m alembic upgrade head`를 실행합니다. 새 마이그레이션 `0005`는 기존 데이터를 보존하고 `aws_environments` 테이블을 추가합니다. 실행 중인 서비스의 DB에 자동 적용하지는 않습니다.
+
+| 설정 | 내용 |
+| --- | --- |
+| `APP_AWS_TEMPLATE_URL` | 인프라 담당자가 제공한 HTTPS S3 템플릿 URL. 버전이 고정되고 이용자가 읽을 수 있는 URL 권장 |
+| `APP_AWS_SERVICE_ROLE_ARN` | 사용자 역할의 신뢰 정책에 들어갈 서비스 서버 IAM 역할 ARN |
+| `APP_AWS_REGIONS` | 지원할 리전 목록. 예: `ap-northeast-2,us-east-1` |
+| `APP_AWS_ROLE_NAME` | 기본 `deploy-service-role`. 선택적으로 `{id}`를 넣으면 환경별 UUID를 사용 |
+
+앞의 세 값이 모두 있어야 새 등록과 검증이 활성화됩니다. 미설정 시 해당 API는 `503 aws_not_configured`를 반환하며 기존 GitHub 기능은 계속 사용할 수 있습니다. 데모 모드에서는 AWS 등록이 비활성화됩니다. `/api/config`의 `aws_available`, `aws_regions`로 화면의 가용 여부와 리전 선택지를 확인할 수 있습니다. 지원 파티션은 우선 `aws`이며 중국·GovCloud 파티션은 제외합니다.
+
+AWS SDK는 서비스 실행 환경의 기본 자격 증명 체인을 사용합니다. 운영에서는 인프라 #4의 서비스 서버 인스턴스 역할로 실행하고, 해당 역할과 사용자 역할 양쪽에서 AssumeRole을 허용해야 합니다. 고객의 Access Key/Secret Key를 입력받거나 저장하지 않습니다.
+
+**현재 인프라 이름 제약:** 기존 정책은 `arn:aws:iam::*:role/deploy-service-role`만 허용하므로 기본값을 이에 맞췄습니다. 이 구성에서는 AWS 계정마다 온보딩 역할 하나를 사용합니다. 동일 AWS 계정에 여러 독립 역할이 필요하면 인프라 담당자가 허용할 역할 이름 패턴을 먼저 정해야 합니다. 예를 들어 그에 맞는 권한이 준비된 후 `APP_AWS_ROLE_NAME=deploy-service-role-{id}`를 사용할 수 있습니다. Service가 인프라 정책을 변경하지 않습니다. 기존 템플릿은 `AdministratorAccess`를 부여하며, 아래 연결 검증은 최소 권한 검증이나 실제 배포 성공을 보장하지 않습니다.
+
+### 요청과 응답
+
+모든 환경 API는 로그인 세션 쿠키가 필요합니다. POST에는 기존 API와 동일한 `Origin` 및 `/api/me`에서 받은 `X-CSRF-Token` 헤더를 보냅니다. 환경은 현재 워크스페이스에 속하며 생성한 사용자만 조회·검증할 수 있습니다. 프로젝트와의 연결은 후속 범위입니다.
+
+1. `POST /api/aws/environments`
+
+   ```json
+   {"request_id":"f0850611-4d63-4b29-9929-1fd39a353fe8","name":"운영 AWS","region":"ap-northeast-2"}
+   ```
+
+   프론트엔드는 등록 시작 시 UUID `request_id`를 한 번 만들고, 중복 클릭·응답 유실 시 동일한 ID와 본문으로 재시도합니다. 신규 요청은 `201`, 동일 요청의 재전송은 기존 레코드를 `200`으로 반환합니다. 같은 ID에 다른 이름·리전을 보내면 `409 request_conflict`입니다. 환경명은 표시용이며 중복될 수 있습니다. 새 등록에는 새 UUID를 사용합니다.
+
+   반환 필드: `id`, `request_id`, `name`, `region`, `status`, `cloudformation_url`, `stack_name`, `role_name`, `role_arn`, `aws_account_id`, `created_at`, `expires_at`, `verified_at`, `error_code`, `retryable`, `retry_after`. 시각은 UTC Unix 초입니다. 처음에는 `status=PENDING`, `role_arn/ aws_account_id/ verified_at=null`입니다. 링크는 저장한 템플릿 URL·서비스 역할 ARN·External ID·역할/스택 이름으로 조립합니다. External ID는 별도 응답 필드로 반환하지 않지만 온보딩 URL의 파라미터에 포함됩니다.
+
+2. `POST /api/aws/environments/{id}/verify`
+
+   ```json
+   {"role_arn":"arn:aws:iam::123456789012:role/deploy-service-role"}
+   ```
+
+   External ID는 요청에 보내지 않습니다. Service가 DB의 값을 사용합니다. 사용자 ARN이나 STS 세션 ARN은 거부합니다. 성공 시 `200`으로 위와 같은 환경 정보를 반환하며, `status=CONNECTED`, 검증된 Role ARN·계정 ID·검증 시각이 채워집니다. 연결된 역할로 같은 요청을 반복하면 저장된 결과를 반환하고 AWS 검증은 재실행하지 않습니다. 이미 연결된 환경의 Role ARN 변경은 `409 already_connected`입니다. `CONNECTED`는 마지막 온보딩 검증 결과이며 지속적인 권한 유효성 점검을 뜻하지 않습니다.
+
+3. `GET /api/aws/environments/{id}`로 개별 상태, `GET /api/aws/environments?limit=50&offset=0`으로 자신의 환경 목록을 조회합니다. 목록은 최신 생성 순이며 `limit`은 1~100입니다. 새로고침이나 재로그인 후 이 API로 진행 상태를 복구할 수 있습니다.
+
+### 상태·오류·재시도
+
+| 상태 | 의미와 다음 행동 |
+| --- | --- |
+| `PENDING` | 링크 발급 완료. 사용자 역할 생성과 ARN 입력 대기 |
+| `VERIFYING` | 역할 검증 진행 중. `retry_after`초 이내 중복 검증 요청은 409 |
+| `FAILED` | 원인을 해결한 후 같은 환경에 ARN 재제출. External ID 유지 |
+| `EXPIRED` | 등록 후 24시간 경과. 새 `request_id`로 등록 시작 |
+| `CONNECTED` | 검증된 연결 저장 완료. 등록 요청의 만료 시각이 지나도 유지 |
+
+서버 중단으로 `VERIFYING` 상태가 남으면 120초 후 조회 응답은 `FAILED`와 `verification_interrupted`를 표시하고 검증을 다시 시도할 수 있습니다. 만료/중단 상태는 조회 시 저장된 시각을 기준으로 계산하므로 별도 스케줄러가 필요하지 않습니다. AWS 호출 중에는 DB 잠금을 유지하지 않으며, 이전 검증의 늦은 응답이 새 검증 결과를 덮어쓰지 못하도록 요청 토큰을 대조합니다.
+
+도메인 오류는 `{"detail":{"code":"access_denied","message":"...","retryable":true}}` 형식입니다. 기존 로그인·CSRF 오류와 입력 형식 오류는 기존 FastAPI 형식을 유지합니다.
+
+| HTTP / 코드 | 처리 |
+| --- | --- |
+| 403 `access_denied` | Role ARN·External ID·양쪽 역할 정책 확인. IAM 반영 지연이면 잠시 후 재시도 |
+| 422 `external_id_not_required` | External ID 누락/오입력으로도 AssumeRole이 가능한 신뢰 정책 수정 |
+| 422 `account_mismatch` | 반환 계정 ID와 Role ARN 계정 불일치. ARN 확인 |
+| 503 `service_credentials_unavailable` | 서비스 실행 역할의 인증 설정 확인 |
+| 503 `aws_unavailable`, 502 `invalid_aws_response` | AWS 일시 오류 등으로 검증 미완료. 재시도 |
+| 410 `request_expired` | 새로운 등록 요청 필요 |
+| 409 `configuration_changed` | 서비스 역할 ARN 또는 지원 리전 정책 변경. 새 등록 요청 필요 |
+| 409 `role_already_registered` | 동일 워크스페이스에 이미 연결된 Role ARN. 기존 환경 확인 |
+| 409 `verification_in_progress` / `verification_superseded` | 상태를 다시 조회한 뒤 필요할 때 재시도 |
+
+등록 만료는 AWS 링크나 생성된 IAM 역할·스택을 삭제하지 않습니다. 고정된 역할 이름으로 이미 스택을 만든 뒤 요청이 만료되면 새 요청의 External ID와 기존 신뢰 정책이 달라집니다. 기존 스택을 사용하지 않는지 확인한 뒤 AWS 콘솔에서 기존 스택 파라미터를 새 External ID에 맞게 갱신하거나 미사용 스택을 정리하고 다시 생성해야 합니다. Service는 스택을 수정·삭제하지 않습니다. 미리 서명된 S3 URL은 Service 요청보다 먼저 만료될 수 있으므로 템플릿 접근 방법은 인프라 담당자와 확인해야 합니다.
+
+### 어댑터와 테스트
+
+`app/aws_adapter.py`의 계약은 `check(role_arn=..., external_id=..., region=...) -> AwsIdentity(account_id=...)`입니다. 역할 접근 성공, External ID 누락/불일치 시 명시적인 `AccessDenied`, 임시 자격 증명의 `GetCallerIdentity` 계정 일치를 확인합니다. 시간 초과나 요청 제한을 정상적인 접근 거부로 간주하지 않습니다. STS 임시 자격 증명은 어댑터 밖으로 반환하거나 DB·API 응답·로그에 기록하지 않습니다. SDK 디버그 로깅은 응답에 자격 증명이 포함될 수 있으므로 운영에서 활성화하지 않습니다.
+
+`create_app(settings, gateway=None, aws_adapter=None)`에 같은 계약의 어댑터를 주입할 수 있습니다. Service는 인증·소유권·상태 전이·DB 저장을, 어댑터는 AWS 검증을 담당합니다.
+
+`python -m pytest tests/test_aws_onboarding.py tests/test_aws_adapter.py tests/test_aws_config_migration.py -q`로 API·동시 요청·실패/만료·SDK 모의 응답·DB 업그레이드/다운그레이드를 확인합니다. 실제 AWS 리소스 생성이나 호출은 하지 않습니다. PostgreSQL 테스트는 기존 `ANYSHIP_TEST_DATABASE_URL` 계약(이름이 `_test`로 끝나는 DB, 테스트별 독립 스키마)을 따릅니다.
+
+참고: [CloudFormation quick-create](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html), [타사 역할 접근과 External ID 검증](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html), [Boto3 STS](https://docs.aws.amazon.com/boto3/latest/reference/services/sts/client/assume_role.html).
+
+## GitHub 모듈
 
 `github/`는 저장소 복제, 브랜치 생성, 변경 확인, 커밋·푸시, PR 생성을 담당하는 모듈입니다. `tests/github_manual.py`는 이 기능들을 연결해 실제 GitHub 저장소에서 실행하는 수동 테스트입니다.
 

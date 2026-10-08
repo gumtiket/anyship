@@ -71,6 +71,34 @@ class RepositoryConnection(Base):
     install_expires_at: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
+class AwsEnvironment(Base):
+    __tablename__ = "aws_environments"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "created_by", "request_id", name="uq_aws_environment_request"),
+        UniqueConstraint("workspace_id", "role_arn", name="uq_aws_environment_role"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    request_id: Mapped[str] = mapped_column(String(36))
+    name: Mapped[str] = mapped_column(String(100))
+    region: Mapped[str] = mapped_column(String(32))
+    external_id: Mapped[str] = mapped_column(String(64), unique=True)
+    template_url: Mapped[str] = mapped_column(Text)
+    service_role_arn: Mapped[str] = mapped_column(String(2048))
+    stack_name: Mapped[str] = mapped_column(String(128))
+    role_name: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    role_arn: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    aws_account_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    expires_at: Mapped[int] = mapped_column(BigInteger)
+    verified_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    verification_token: Mapped[str] = mapped_column(String(36), default="")
+    lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
 class CodeChange(Base):
     __tablename__ = "code_changes"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
