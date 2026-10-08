@@ -1,4 +1,4 @@
-# A가 현재 AI 파트에 연결하는 방법 (P5)
+# A가 현재 AI 파트에 연결하는 방법 (P6)
 
 현재 B는 로컬 레포 경로를 받아 진단 JSON, 코드 변경안 diff, Dockerfile과 배포 명세를 생성한다. GitHub URL 클론과 PR 생성은 A에서 연결한다. B의 HTTP 서버는 없다.
 
@@ -43,3 +43,5 @@ P4 호출은 CLI --gate docker 또는 함수 runner=DockerCliRunner()다. --gate
 P5는 `recommendation.set`을 규칙으로 고정하고 LLM에는 근거 문장만 맡긴다. C의 tfvars/단가가 미확정이므로 `needs_confirmation=["tfvars_schema", "cost_table"]`을 화면에 **임시 추정치**로 표시한다. 실제 인프라 적용 전 체크리스트는 `docs/p5-infra-confirmation-checklist.md`다. 변수 alias/범위/기본값은 `spec/tfvars_schema.py`, 비용 가정과 단가는 `spec/cost_table.py`에만 있다.
 
 함수에 `runner=DockerCliRunner(), decision_llm=client, repair_llm=client`를 추가하면 자체 샘플의 추천/검증까지 수행한다. 최대 게이트 실행은 최초 포함 3회이며 성공·반복 제안·보안 검사 거부·비코드 실패 시 일찍 종료한다. `gate_report.attempts`, `retry_stop_reason`, `timings_s`를 A가 그대로 읽을 수 있다. 단계별 토큰/비용은 `cost.stages`에 모이고, 단가 미확정은 null이다. CLI `--no-gate`는 게이트 생략, `--no-compare`는 원본 복사본 비교 생략이다. 일반 앱은 이 옵션과 무관하게 게이트 skipped다.
+
+P6의 엄격 LLM replay와 사전 결과 캐시를 지원한다. 현재 실행과 과거 검증/사용량 표시 및 예외 처리의 상세 계약은 docs/integration-for-service.md를 따른다. cache의 gate.status=skipped / historical_status=passed이며 pr_eligible=false다. 캐시 비용은 historical=true와 external_calls=0으로 표시한다.

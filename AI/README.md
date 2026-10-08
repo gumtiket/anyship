@@ -21,7 +21,7 @@ AI/
 ```sh
 cd AI
 python3.12 -m venv ai/.venv
-ai/.venv/bin/python -m pip install -e 'ai[dev]'
+ai/.venv/bin/python -m pip install -e 'ai[dev]' -c ai/requirements-dev.lock
 ai/.venv/bin/python -m ai analyze samples/todo --llm fake --gate fake --out out/todo/
 ai/.venv/bin/python -m pytest ai/tests -q
 ai/.venv/bin/ruff check ai
@@ -42,8 +42,17 @@ Fake는 오프라인 흐름 검사용이며 게이트는 `skipped`다. 실제 �
 - 게이트 실패 시 최초 포함 최대 3회 실행한다. 반복 수정안, 보안/API/환경변수 계약 변경, 비코드 실패는 일찍 중단한다.
 - 서버리스/상시 컨테이너 변수 모델과 비용 테이블은 C 확정 전의 임시값이다. `needs_confirmation=["tfvars_schema", "cost_table"]`을 표시하고 [확인 체크리스트](docs/p5-infra-confirmation-checklist.md)를 따른다.
 
-P5까지 구현했으며 P6 골든 테스트·데모 캐시는 남아 있다. 전체 앱 배포·PR 생성·merge·ECR·어댑터 실행은 이 모듈에서 수행하지 않는다.
+P6까지 구현했다. 두 고정 샘플의 엄격 LLM replay·골든 회귀·사전 실행 캐시를 제공한다. 전체 앱 배포·PR 생성·merge·ECR·어댑터 실행은 이 모듈에서 수행하지 않는다.
 
 ## 팀 서비스 연결 상태
 
 팀의 `service/app/ai_contract.py`는 `analyze(AnalysisInput)`/`modify(ModificationInput)` Protocol을 정의한다. B의 현재 입력은 클론된 **로컬 레포 경로**이고 출력은 파일 7종이다. 지금 파일 추가만으로 웹 AI가 활성화되지 않는다. A가 코드 자료 제공, SHA/허용 경로/크기 검증, 항목별 변경과 검토·게시 경계를 연결해야 한다. 이 전달 작업에서는 서비스 코드를 수정하지 않는다.
+
+## P6 오프라인 재현
+
+```sh
+ai/.venv/bin/python -m ai analyze samples/todo --llm replay --gate fake --out out/replay/
+ai/.venv/bin/python -m ai analyze samples/todo --use-demo-cache --out out/demo/
+```
+
+캐시는 모든 로그에 (사전 실행 결과)를 표시한다. 현재 게이트는 skipped, 과거 검증은 historical_status=passed이며 현재 API 호출은 0이다. 캐시 비용은 과거 사용량이다. [서비스 연결 문서](docs/integration-for-service.md)와 [인수인계 체크리스트](docs/handoff-checklist.md)를 확인한다. 모델 선택은 [Claude 전달 프롬프트](ai/deliverables/model-selection-prompt.md)로 별도 판단한다.

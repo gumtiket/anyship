@@ -1,0 +1,280 @@
+{
+  "status": "completed",
+  "support_grade": "supported",
+  "violations": [
+    {
+      "id": "sqlite_usage:app/db.py:6",
+      "factor": 6,
+      "rule": "sqlite_usage",
+      "file": "app/db.py",
+      "line": 6,
+      "evidence": "SQLite DB URL을 코드/설정에서 발견했습니다. 값은 생략합니다.",
+      "severity": "warning",
+      "auto_fixable": false,
+      "change_class": "risky",
+      "confidence": "confirmed",
+      "source": "rule",
+      "description": "SQLite 데이터베이스 URL이 코드에 하드코딩되어 있습니다. 파일 기반 DB는 다중 인스턴스 환경에서 동시성 문제를 야기할 수 있습니다.",
+      "impact": "클라우드 환경 배포 시 읽기 전용 파일시스템에서 DB 파일 생성 실패, 다중 Pod 환경에서 데이터 일관성 문제 발생 가능"
+    },
+    {
+      "id": "hardcoded_secret:app/main.py:16",
+      "factor": 3,
+      "rule": "hardcoded_secret",
+      "file": "app/main.py",
+      "line": 16,
+      "evidence": "인증 정보 이름의 변수에 리터럴을 대입합니다. 값은 [REDACTED]입니다.",
+      "severity": "warning",
+      "auto_fixable": true,
+      "change_class": "safe",
+      "confidence": "confirmed",
+      "source": "rule",
+      "description": "인증 정보(SECRET_KEY)가 코드에 리터럴로 하드코딩되어 있습니다.",
+      "impact": "소스 코드 노출 시 인증 정보 유출, 환경별 설정 분리 불가능"
+    },
+    {
+      "id": "file_log:app/main.py:31",
+      "factor": 11,
+      "rule": "file_log",
+      "file": "app/main.py",
+      "line": 31,
+      "evidence": "파일 로그 핸들러/filename 설정을 발견했습니다.",
+      "severity": "warning",
+      "auto_fixable": true,
+      "change_class": "safe",
+      "confidence": "confirmed",
+      "source": "rule",
+      "description": "로그를 로컬 파일(app.log)로 기록하도록 설정되어 있습니다.",
+      "impact": "읽기 전용 파일시스템 환경에서 로그 파일 생성 실패, 컨테이너 재시작 시 로그 손실"
+    },
+    {
+      "id": "local_file_write:app/main.py:135",
+      "factor": 6,
+      "rule": "local_file_write",
+      "file": "app/main.py",
+      "line": 135,
+      "evidence": "파일 쓰기 메서드 호출. 영속성/저장 위치는 추가 검토가 필요합니다.",
+      "severity": "warning",
+      "auto_fixable": false,
+      "change_class": "risky",
+      "confidence": "needs_review",
+      "source": "rule",
+      "description": "export_todos 엔드포인트에서 로컬 파일시스템에 JSON 파일을 직접 쓰고 있습니다.",
+      "impact": "읽기 전용 파일시스템 환경에서 파일 쓰기 실패, 다중 인스턴스 환경에서 데이터 동기화 문제"
+    },
+    {
+      "id": "fixed_port:app/main.py:143",
+      "factor": 7,
+      "rule": "fixed_port",
+      "file": "app/main.py",
+      "line": 143,
+      "evidence": "uvicorn 시작 포트를 정수 리터럴로 지정합니다.",
+      "severity": "warning",
+      "auto_fixable": true,
+      "change_class": "safe",
+      "confidence": "confirmed",
+      "source": "rule",
+      "description": "uvicorn 서버 포트가 정수 리터럴(8000)로 고정되어 있습니다.",
+      "impact": "환경변수를 통한 포트 설정 불가능, 다중 인스턴스 실행 시 포트 충돌 가능성"
+    },
+    {
+      "id": "unpinned_dependency:requirements.txt:1",
+      "factor": 2,
+      "rule": "unpinned_dependency",
+      "file": "requirements.txt",
+      "line": 1,
+      "evidence": "이 선언 파일에서 4개 의존성의 정확한 버전 고정이 미확인입니다.",
+      "severity": "warning",
+      "auto_fixable": false,
+      "change_class": "safe",
+      "confidence": "confirmed",
+      "source": "rule",
+      "description": "requirements.txt에서 일부 의존성의 정확한 버전이 고정되지 않았습니다.",
+      "impact": "재설치 시 다른 버전의 패키지가 설치될 수 있어 예측 불가능한 동작 발생 가능"
+    }
+  ],
+  "signals": [
+    {
+      "name": "scheduler",
+      "file": "app/main.py",
+      "line": 8,
+      "evidence": "스케줄러/작업 라이브러리 import. 실제 실행 위치는 검토가 필요합니다."
+    }
+  ],
+  "warnings": [
+    {
+      "code": "llm_candidate_rejected",
+      "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+    },
+    {
+      "code": "llm_candidate_rejected",
+      "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+    },
+    {
+      "code": "llm_candidate_rejected",
+      "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+    },
+    {
+      "code": "llm_candidate_rejected",
+      "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+    },
+    {
+      "code": "data_migration_unsupported",
+      "message": "기존 데이터는 자동으로 이전되지 않는다. 데이터 이전 필요(미지원)"
+    },
+    {
+      "code": "file_storage_change_deferred",
+      "message": "영속 파일 저장 전환은 승인 필요이며 /tmp로 자동 이동하지 않았습니다."
+    },
+    {
+      "code": "dependency_version_unknown",
+      "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+    }
+  ],
+  "framework": {
+    "support_grade": "supported",
+    "framework": "fastapi",
+    "entrypoint": "app.main:app",
+    "reason": "FastAPI 전역 앱 진입점을 정적으로 확인했습니다."
+  },
+  "factor_reviews": [
+    {
+      "factor": 1,
+      "principle": "코드베이스",
+      "owner": "구조",
+      "status": "n/a"
+    },
+    {
+      "factor": 2,
+      "principle": "의존성",
+      "owner": "AI 진단",
+      "status": "violation"
+    },
+    {
+      "factor": 3,
+      "principle": "설정",
+      "owner": "AI 변환 + 어댑터",
+      "status": "violation"
+    },
+    {
+      "factor": 4,
+      "principle": "외부 자원",
+      "owner": "AI 변환 + 어댑터",
+      "status": "violation"
+    },
+    {
+      "factor": 5,
+      "principle": "빌드·릴리스·실행 분리",
+      "owner": "서비스 + 어댑터",
+      "status": "n/a"
+    },
+    {
+      "factor": 6,
+      "principle": "프로세스(무상태)",
+      "owner": "AI 진단",
+      "status": "violation"
+    },
+    {
+      "factor": 7,
+      "principle": "포트 바인딩",
+      "owner": "AI 변환 + 어댑터",
+      "status": "violation"
+    },
+    {
+      "factor": 8,
+      "principle": "동시성",
+      "owner": "어댑터",
+      "status": "n/a"
+    },
+    {
+      "factor": 9,
+      "principle": "폐기 가능성",
+      "owner": "어댑터",
+      "status": "n/a"
+    },
+    {
+      "factor": 10,
+      "principle": "개발·운영 일치",
+      "owner": "구조",
+      "status": "n/a"
+    },
+    {
+      "factor": 11,
+      "principle": "로그",
+      "owner": "AI 변환 + 어댑터",
+      "status": "violation"
+    },
+    {
+      "factor": 12,
+      "principle": "관리 프로세스",
+      "owner": "어댑터",
+      "status": "n/a"
+    }
+  ],
+  "enrichment_status": "completed",
+  "transformation": {
+    "status": "partial",
+    "changed_files": [
+      "app/db.py",
+      "app/main.py",
+      "app/migrate.py",
+      "requirements.txt"
+    ],
+    "addressed_ids": [
+      "file_log:app/main.py:31",
+      "fixed_port:app/main.py:143",
+      "hardcoded_secret:app/main.py:16",
+      "sqlite_usage:app/db.py:6"
+    ],
+    "deferred_ids": [
+      "local_file_write:app/main.py:135",
+      "unpinned_dependency:requirements.txt:1"
+    ],
+    "env_vars": [
+      {
+        "name": "DATABASE_URL",
+        "secret": true,
+        "required": true,
+        "default": null
+      },
+      {
+        "name": "LOG_LEVEL",
+        "secret": false,
+        "required": false,
+        "default": "INFO"
+      },
+      {
+        "name": "PORT",
+        "secret": false,
+        "required": false,
+        "default": "8080"
+      },
+      {
+        "name": "SECRET_KEY",
+        "secret": true,
+        "required": true,
+        "default": null
+      }
+    ],
+    "migrate_command": "python -m app.migrate",
+    "sample_name": "todo-scheduler",
+    "needs_approval": true,
+    "patch_valid": true,
+    "compile_passed": true,
+    "llm_attempts": 0,
+    "warnings": [
+      {
+        "code": "data_migration_unsupported",
+        "message": "기존 데이터는 자동으로 이전되지 않는다. 데이터 이전 필요(미지원)"
+      },
+      {
+        "code": "file_storage_change_deferred",
+        "message": "영속 파일 저장 전환은 승인 필요이며 /tmp로 자동 이동하지 않았습니다."
+      },
+      {
+        "code": "dependency_version_unknown",
+        "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+      }
+    ]
+  }
+}

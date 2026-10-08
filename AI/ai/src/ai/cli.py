@@ -6,6 +6,7 @@ from pathlib import Path
 from ai.gate.runner import DockerCliRunner, FakeRunner
 from ai.llm import BedrockClient, FakeLLMClient
 from ai.llm.fake import recommendation_response
+from ai.llm.recording import DEFAULT_FIXTURES, PlaybackError, RecordingClient, ReplayClient
 from ai.pipeline import run_analysis
 
 
@@ -23,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     analyze.add_argument(
         "--llm",
-        choices=("none", "fake", "bedrock"),
+        choices=("none", "fake", "bedrock", "record", "replay"),
         default="none",
         help="none: 규칙/템플릿만, fake: 오프라인 응답, bedrock: 유료 실제 호출",
     )
@@ -34,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Dockerfile/명세 제안에 쓸 LLM. bedrock은 추가 유료 호출",
     )
     analyze.add_argument("--source-repo", default=None)
+    analyze.add_argument("--llm-fixtures", default=str(DEFAULT_FIXTURES))
+    analyze.add_argument("--use-demo-cache", action="store_true")
+    analyze.add_argument("--demo-cache-dir", default=None)
     analyze.add_argument("--commit", default=None)
     analyze.add_argument("--profile", choices=("dev", "prod"), default="dev")
     analyze.add_argument(
@@ -67,6 +71,14 @@ def main(argv: list[str] | None = None) -> int:
             if args.llm == "fake"
             else None
         )
+        if args.llm == "record":
+            llm = RecordingClient(BedrockClient(), args.repo_path, Path(args.llm_fixtures))
+        elif args.llm == "replay":
+            llm = ReplayClient(args.repo_path, Path(args.llm_fixtures))
+        if args.llm in {"record", "replay"} and args.artifact_llm != "none":
+            raise ValueError(
+                "record/replay의 패키징은 고정 템플릿입니다. artifact-llm은 none으로 두세요."
+            )
         artifact_llm = (
             llm
             if args.artifact_llm == "bedrock" and args.llm == "bedrock"
@@ -100,8 +112,12 @@ def main(argv: list[str] | None = None) -> int:
             commit=args.commit,
             profile=args.profile,
             save_llm_trace=args.save_llm_trace,
+            use_demo_cache=args.use_demo_cache,
+            demo_cache_dir=args.demo_cache_dir,
         )
-    except (ValueError, OSError) as error:
+        if isinstance(llm, ReplayClient) and result.execution_source != "demo_cache":
+            llm.assert_consumed()
+    except (ValueError, OSError, PlaybackError) as error:
         print(f"[실패] {error}", file=sys.stderr)
         return 2
     finally:

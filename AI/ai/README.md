@@ -1,6 +1,27 @@
-# Bronze AI — P5
+# Bronze AI — P6
 
-실행 기준 디렉터리는 팀 저장소의 `AI/`다. 상위 [시작 안내](../README.md)를 먼저 따른다.
+실행 기준은 `ai/`와 `samples/`가 나란히 있는 프로젝트 루트다. 팀 저장소에서는 `cd AI` 후 실행한다.
+
+## 설치와 PyCharm
+
+Python 3.12를 사용한다. 기존 프로젝트 밖의 가상환경을 실행 의존성으로 쓰지 않는다.
+
+```sh
+python3.12 -m venv ai/.venv
+ai/.venv/bin/python -m pip install -e 'ai[dev]' -c ai/requirements-dev.lock
+```
+
+PyCharm은 Existing environment에서 현재 프로젝트의 `ai/.venv/bin/python`을 고른다. Run Configuration은 module `ai`, parameters `analyze samples/todo --llm replay --out out/todo/`, working directory는 ai와 samples가 있는 디렉터리다.
+
+| 환경변수 | 의미 |
+| --- | --- |
+| AWS_PROFILE | 개발자의 로컬 프로필. 서버에서는 IAM 역할 사용 가능 |
+| AWS_DEFAULT_REGION | 프로필/인증 갱신 리전 |
+| BEDROCK_REGION | 실제 Bedrock 호출 리전 |
+| BEDROCK_MODEL_ID_STRONG | 계정에서 확인한 코드 생성/복구 모델 ID |
+| BEDROCK_MODEL_ID_FAST | 계정에서 확인한 설명/근거 모델 ID |
+
+기본 none, fake, replay, 데모 캐시 hit는 AWS 자격 증명 없이 실행된다. 실제 bedrock/record만 위 설정을 요구한다. 모델 버전 비교는 [Claude 전달 프롬프트](deliverables/model-selection-prompt.md)로 별도 판단한다.
 
 ## 출력과 상태
 
@@ -102,4 +123,64 @@ FAST는 근거 문장만 작성한다. 다른 세트를 주장하면 재생성 �
 
 로컬 P5 기준 기본 테스트 195 passed / 외부 연동 5 skipped, 실제 Docker 선택 테스트 3 passed다. 실제 FAST Haiku 4.5 + Docker는 todo=aws-serverless / todo-scheduler=aws-always-on으로 끝까지 검증했다. 실제 STRONG 생성 복구 품질은 미검증이며, 복구 루프는 Fake 수정안+실제 Docker로 검증했다. 이력 결과를 이 저장소에 포함하지 않으므로 새 환경에서 위 명령으로 재현한다.
 
-P6 골든 테스트/캐시, C 계약 확정, A의 권한 확인된 코드 자료 제공과 AIProvider 연결은 남아 있다. 게이트 통과는 샘플 기동/CRUD 범위의 증거이며 전체 기능·PR 승인·클라우드 배포 준비 완료를 뜻하지 않는다.
+P6의 두 샘플 골든 회귀와 사전 실행 캐시를 구현했다. C 계약 확정과 A의 권한 확인된 코드 자료 제공·AIProvider 연결은 남아 있다. 게이트 통과는 샘플 기동/CRUD 범위의 증거이며 전체 기능·PR 승인·클라우드 배포 준비 완료를 뜻하지 않는다.
+
+## P6 기록·재생·골든
+
+```sh
+# 기록된 실제 응답을 사용한다. 현재 AWS 호출/토큰/비용은 0이다.
+ai/.venv/bin/python -m ai analyze samples/todo --llm replay --gate fake --out out/replay-todo/
+ai/.venv/bin/python -m ai analyze samples/todo-scheduler --llm replay --no-gate --out out/replay-scheduler/
+
+# 유료 실제 Bedrock 응답을 재기록한다. 먼저 모델/프로필 환경변수를 설정한다.
+ai/.venv/bin/python -m ai analyze samples/todo --llm record --no-gate --out out/record-todo/
+
+# 기존 골든과 비교한다. 차이가 있으면 검토용 out을 남기고 종료 코드 1이다.
+ai/.venv/bin/python ai/scripts/refresh_golden.py
+# 의도한 프롬프트/스키마 변경 후 실제 재기록. 유료 호출이며 기준은 자동 덮어쓰지 않는다.
+ai/.venv/bin/python ai/scripts/refresh_golden.py --record
+# out/golden-refresh의 diff/명세를 검토한 뒤 명시적으로 기준을 갱신한다.
+ai/.venv/bin/python ai/scripts/refresh_golden.py --accept
+```
+
+fixture는 `ai/tests/fixtures/llm/<sample>/<stage>.json`에 있다. 실제 전송 system/schema/user/추론 옵션의 해시와 마스킹한 원문 응답·사용량·모델·응답 해시를 저장한다. 프롬프트 원문·인증 정보·SDK 오류·HTTP 헤더는 저장하지 않는다. 두 자체 샘플만 기록/재생하며, 프롬프트/스키마/입력/옵션이 달라지면 `prompt_hash_mismatch`로 즉시 실패한다. 응답 변조/누락/미사용 기록도 명확한 에러다. 일반 LLM 템플릿 fallback으로 이 오류를 숨기지 않는다.
+
+record/replay CLI의 패키징은 고정 템플릿이며 artifact-llm은 none이다. 함수에서 RecordingClient/ReplayClient를 직접 사용할 수도 있다. replay의 새 전송 수·토큰·비용은 0이고, `cost.calls`는 로컬 재생 횟수다. 원래 사용량은 fixture의 response에 보존한다. 실제 Docker 검증은 별도 --gate docker 선택이며 replay 자체는 런타임 검증 성공을 뜻하지 않는다.
+
+골든은 위반 집합·12-factor 담당 표·신호·추천 세트·명세 핵심 필드·변수·변경안 적용/컴파일·Dockerfile lint/바이트 동일성을 고정한다. 두 샘플의 기록 기반 회귀이며 독립 holdout이나 임의 앱/모델 정확성·재빌드 이미지 동일성 검증이 아니다.
+
+## P6 데모 캐시
+
+```sh
+# 사전 결과 표시. hit는 현재 Bedrock/Docker 호출 없이 로그만 순서대로 재생한다.
+ai/.venv/bin/python -m ai analyze samples/todo --use-demo-cache --out out/cached-todo/
+ai/.venv/bin/python -m ai analyze samples/todo-scheduler --use-demo-cache --out out/cached-scheduler/
+
+# 실제 Bedrock + Docker로 두 캐시와 LLM fixture 재작성. 실제 추론 요금 발생.
+ai/.venv/bin/python ai/scripts/build_demo_cache.py
+```
+
+캐시는 `ai/demo-cache/<sample>/out`의 7종과 manifest에 있다. source/engine/설정/각 파일 해시가 맞아야 사용한다. 대상 env, commit, 명시한 source.repo, profile, 이미지 식별자, tfvars/비용 가정, 원본 비교 여부도 확인한다. 캐시가 없거나 달라지면 정상 실행으로 돌아가고 로그로 알린다. 실제 분석 실패 후 몰래 캐시로 성공을 대신하지 않는다. source.repo 미제공의 데모 캐시는 sample:// 이름을 사용하며 실제 GitHub 저장소/commit으로 해석하지 않는다.
+
+모든 재생 로그에 `(사전 실행 결과)`를 붙이고 짧고 제한된 지연만 적용한다. 과거 로그의 단계 시간/trace 언급은 과거 실행을 가리키며, 공유 캐시에 개인 trace 파일은 넣지 않는다. 응답은 LLM fixture에서 확인한다. 현재 결과는 execution_source=demo_cache, 현재 gate.status=skipped, historical_status=passed, pr_eligible=false다. 캐시 비용은 historical=true와 external_calls=0이며 total/calls/stages는 과거 사용량이다. 추가 cache-provenance.json에 이전 시간·해시를 기록한다. 캐시 hit에서는 새 BuildContext를 반환하지 않는다.
+
+함수의 `run_analysis(..., use_demo_cache=True, demo_cache_dir=...)`도 같은 경계를 따른다. 일반 앱과 다른 코드에는 캐시를 적용하지 않는다. 출력은 원본과 분리하고 요청마다 새 경로를 사용한다.
+
+## 단계와 테스트
+
+Stage는 `src/ai/stages.py` 하나에서 정의한다: 분석 중, 검증 중, PR 대기, 빌드 중, 배포 중, 성공, 실패. 서비스와 공동 확정 전의 값이며 로그 문자열을 status 판정 대신 쓰지 않는다.
+
+```sh
+ai/.venv/bin/python -m pytest ai/tests -q
+ai/.venv/bin/ruff check ai
+ai/.venv/bin/ruff format --check ai
+# 실제 외부 호출은 별도 선택한다.
+ai/.venv/bin/python -m pytest -m bedrock ai/tests -v
+ai/.venv/bin/python -m pytest -m docker ai/tests -v
+```
+
+기본은 Fake/기록 replay/캐시 검증으로 AWS·Docker 없이 통과해야 한다. 기본 실행은 외부 마커를 건너뛴다. fixture/cache의 자격 증명 패턴 검사는 인식한 패턴의 범위이며 모든 비밀을 자동 탐지한다는 보장은 없다. cache manifest와 해시는 손상/오사용 검출용이며 신뢰할 수 없는 사람이 제공한 파일의 진위를 인증하는 서명이 아니다.
+
+[서비스 연결 문서](../docs/integration-for-service.md)와 [인수인계 체크리스트](../docs/handoff-checklist.md)를 따른다. C 계약/단가, 서비스 서버 Docker/플랫폼, 웹 AIProvider 연결, 실제 STRONG 복구 품질과 운영 데이터/롤백은 별도 확인이 남아 있다.
+
+2026-10-09 P6 완료 검증: 기본 219 passed / 외부 연동 5 skipped, P6 추가 24 passed, ruff 통과. 실제 사전 실행은 두 샘플 모두 Docker/Postgres 범위 통과다. 캐시 저장 검사 수정 전의 성공 분석까지 포함한 실제 사용은 총 6회, 입력 12,317 / 출력 4,650토큰이며 비용 단가는 미확정이다. 캐시에는 최종 성공 실행만 포함하고 전체 사용 집계/개인 trace는 out에 별도 보존했다.

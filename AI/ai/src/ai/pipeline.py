@@ -77,6 +77,8 @@ def run_analysis(
     cost_assumptions: CostAssumptions | None = None,
     no_gate: bool = False,
     compare_original: bool = True,
+    use_demo_cache: bool = False,
+    demo_cache_dir: str | Path | None = None,
 ) -> AnalysisResult:
     """P5: diagnosis/proposals/packaging/recommendation and sample-only bounded repair.
 
@@ -118,6 +120,32 @@ def run_analysis(
     output_names = (*OUTPUT_NAMES, *TRACE_NAMES) if save_llm_trace else OUTPUT_NAMES
     if any((output / name).is_symlink() for name in (*output_names, ".dockerignore")):
         raise ValueError("원본 보호: 출력 파일 심볼릭 링크는 허용하지 않습니다.")
+    if (output / "cache-provenance.json").is_symlink():
+        raise ValueError("원본 보호: 출력 파일 심볼릭 링크는 허용하지 않습니다.")
+    if use_demo_cache:
+        from ai.demo_cache import DEFAULT_CACHE, settings_key, try_restore
+        from ai.transform.service import identify_sample
+
+        sample = identify_sample(RepoView(repo)) or "unknown"
+        cached = try_restore(
+            repo,
+            output,
+            log,
+            root=Path(demo_cache_dir) if demo_cache_dir is not None else DEFAULT_CACHE,
+            settings=settings_key(
+                sample,
+                target_env=target_env,
+                commit=commit,
+                source_repo=source_repo,
+                profile=profile,
+                image_reference=image_reference,
+                tfvars_overrides=tfvars_overrides,
+                cost_assumptions=cost_assumptions,
+                compare_original=compare_original,
+            ),
+        )
+        if cached is not None:
+            return cached
     if save_llm_trace and any(
         client is not None and not isinstance(client, ValidatingClient)
         for client in (llm, artifact_llm, decision_llm, repair_llm)
@@ -350,6 +378,15 @@ def run_analysis(
         "gate-report.json": result.gate_report,
         "cost.json": result.cost,
     }
+    if any(getattr(client, "is_replay", False) for client, _ in tracked_clients):
+        result.execution_source = "llm_replay"
+        result.cost.execution_source = "llm_replay"
+        result.cost.external_calls = (
+            0
+            if all(call.model_id.startswith("replay:") for call in result.cost.calls)
+            and result.cost.total.usage_complete
+            else None
+        )
     for name, model in data.items():
         _write_output(
             output / name,

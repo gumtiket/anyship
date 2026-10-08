@@ -1,0 +1,54 @@
+{
+  "status": "completed",
+  "set": "aws-serverless",
+  "rationale": "요청 기반 워크로드로 요청당 10초 이내에 처리되며 유휴 시간에 자동으로 스케일 다운되는 특성을 가지고 있습니다. 이러한 단기 요청 처리 패턴에 최적화된 구성입니다.",
+  "needs_approval": true,
+  "rule_fired": "short_request",
+  "rationale_source": "llm",
+  "signals": [],
+  "estimated_monthly_cost": 25.02,
+  "assumptions": [
+    "임시 추정치: 단가 미확인, C 확정 전. 실제 AWS 요금이나 청구 견적이 아닙니다.",
+    "리전 가정: ap-northeast-2",
+    "월 요청 수 가정: 100000",
+    "상시 가동 시간 가정: 월 730시간",
+    "프리티어·크레딧·할인 적용 제외",
+    "통화 USD, 환율 변환 미적용",
+    "요청당 평균 실행 시간 가정: 0.2초 (실측/최대 시간 아님)",
+    "저장 용량 가정: 20GB, 메모리 입력: 256MB",
+    "데이터 전송·NAT·백업·로그·세금·환율·DB 고가용성·하드웨어 구입비는 계산하지 않음",
+    "서버리스는 소형 단일 DB 가정; 상시 컨테이너는 DB도 동일 서버에서 실행하는 가정",
+    "requests: 0.2 USD / 백만 요청 — 단가 미확인",
+    "duration: 2e-05 USD / GB-second — 단가 미확인",
+    "database: 0.03 USD / DB 시간 — 단가 미확인",
+    "storage: 0.15 USD / GB-month — 단가 미확인",
+    "이미지 식별자 미제공: A가 실제 빌드된 이미지 태그/digest를 확정해야 함"
+  ],
+  "tfvars": {
+    "port": 8080,
+    "memory_mb": 256,
+    "timeout_s": 30
+  },
+  "needs_confirmation": [
+    "tfvars_schema",
+    "cost_table"
+  ],
+  "warnings": [
+    {
+      "code": "data_migration_unsupported",
+      "message": "기존 데이터는 자동으로 이전되지 않는다. 데이터 이전 필요(미지원)"
+    },
+    {
+      "code": "file_storage_change_deferred",
+      "message": "영속 파일 저장 전환은 승인 필요이며 /tmp로 자동 이동하지 않았습니다."
+    },
+    {
+      "code": "dependency_version_unknown",
+      "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+    },
+    {
+      "code": "provisional_infra_contract",
+      "message": "확인 필요(C 확정 전): tfvars 스키마·단가를 실제 인프라에 바로 적용하지 마세요."
+    }
+  ]
+}

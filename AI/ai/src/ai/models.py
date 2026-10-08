@@ -114,6 +114,8 @@ class GateReport(OutputModel):
     scope: str = "not_run"
     attempts: list[GateAttempt] = Field(default_factory=list)
     retry_stop_reason: str | None = None
+    execution_source: Literal["current_run", "demo_cache"] = "current_run"
+    historical_status: str | None = None
 
 
 class CallCost(OutputModel):
@@ -140,6 +142,9 @@ class CostReport(OutputModel):
     calls: list[CallCost] = Field(default_factory=list)
     stages: dict[str, CostSummary] = Field(default_factory=dict)
     total: CostSummary = Field(default_factory=CostSummary)
+    execution_source: Literal["current_run", "llm_replay", "demo_cache"] = "current_run"
+    historical: bool = False
+    external_calls: int | None = Field(default=None, ge=0)
 
 
 class AnalysisResult(OutputModel):
@@ -155,3 +160,4 @@ class AnalysisResult(OutputModel):
     build_context: BuildContext | None = None
     packaging_warnings: list[WarningItem] = Field(default_factory=list)
     timings_s: dict[str, float] = Field(default_factory=dict)
+    execution_source: Literal["current_run", "llm_replay", "demo_cache"] = "current_run"

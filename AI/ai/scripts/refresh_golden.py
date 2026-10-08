@@ -1,0 +1,63 @@
+"""Refresh explicit recorded fixtures, or review/accept their offline golden projection."""
+
+import argparse
+import json
+from pathlib import Path
+
+from ai.golden import core_result
+from ai.llm import BedrockClient
+from ai.llm.recording import DEFAULT_FIXTURES, RecordingClient, ReplayClient, write_json
+from ai.pipeline import run_analysis
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--record", action="store_true", help="Bedrock 유료 호출로 LLM fixture 재기록"
+    )
+    parser.add_argument(
+        "--accept", action="store_true", help="검토한 새 골든 기준을 명시적으로 저장"
+    )
+    parser.add_argument("--fixtures", type=Path, default=DEFAULT_FIXTURES)
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parents[2]
+    failed = False
+    for name in ("todo", "todo-scheduler"):
+        repo = root / "samples" / name
+        client = (
+            RecordingClient(BedrockClient(), repo, args.fixtures)
+            if args.record
+            else ReplayClient(repo, args.fixtures)
+        )
+        result = run_analysis(
+            repo,
+            out_dir=root / "out/golden-refresh" / name,
+            source_repo=f"sample://{name}",
+            llm=client,
+            decision_llm=client,
+        )
+        try:
+            if result.diagnosis.enrichment_status != "completed":
+                raise ValueError("golden_requires_successful_analysis")
+            if isinstance(client, ReplayClient):
+                client.assert_consumed()
+            actual = core_result(result)
+            path = root / "ai/tests/fixtures/golden" / f"{name}.json"
+            if args.accept:
+                write_json(path, actual)
+                print(f"{name}: 의도한 골든 기준 저장")
+            elif not path.exists() or json.loads(path.read_text()) != actual:
+                failed = True
+                print(
+                    f"{name}: 골든 기준 차이. out/golden-refresh를 검토한 뒤 --accept로 반영하세요."
+                )
+            else:
+                print(f"{name}: 기존 골든 일치")
+        finally:
+            if result.build_context is not None:
+                result.build_context.cleanup()
+    return int(failed)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
