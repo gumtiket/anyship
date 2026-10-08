@@ -1,4 +1,6 @@
-# GitHub 모듈 사용 및 테스트 가이드
+# AnyShip GitHub 모듈 사용 및 테스트 가이드
+
+AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안내](../docs/LOCAL_DEVELOPMENT.md)를 참고하세요. 아래는 독립적으로 사용할 수 있는 기존 CLI 모듈 안내입니다.
 
 `github/`는 저장소 복제, 브랜치 생성, 변경 확인, 커밋·푸시, PR 생성을 담당하는 모듈입니다. `tests/github_manual.py`는 이 기능들을 연결해 실제 GitHub 저장소에서 실행하는 수동 테스트입니다.
 
@@ -11,13 +13,13 @@
 다른 프로젝트의 Python 환경에서 이 저장소의 `service` 경로를 지정해 설치합니다. 예시 경로는 자신의 체크아웃 위치로 바꿉니다.
 
 ```powershell
-python -m pip install "C:\path\to\team-bronze\service"
+python -m pip install "C:\path\to\project\service"
 ```
 
 모듈 개발 환경에서는 `service` 안에서 편집 가능 설치를 사용할 수 있습니다.
 
 ```powershell
-python -m pip install -e ".[test]"
+python -m pip install -e ".[web,test]"
 ```
 
 설정과 코드 수정은 호출자가 담당합니다. 객체를 생성하는 것만으로 파일이나 네트워크 작업을 수행하지 않습니다. 다음 코드는 각 메서드를 호출할 때 실제 복제·커밋·푸시·PR 생성을 수행하는 예시입니다. `repo.clone()`에는 아직 존재하지 않는 대상 경로를 사용하세요.
@@ -148,7 +150,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-현재 테스트 구성은 63개입니다. 특정 기능만 확인하려면 파일을 지정합니다.
+전체 테스트에는 web 의존성이 필요합니다. 기존 GitHub 모듈과 웹 인증·권한·실제 GitHub API 게시 흐름을 함께 검증합니다. 특정 기능만 확인하려면 파일을 지정합니다.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_repository.py -v
@@ -253,7 +255,7 @@ Draft PR도 만들려면 위 명령 대신 다음을 실행합니다.
 
 **이 단계는 실제 GitHub를 변경합니다.** Git이 무시하지 않는 수정·추가·삭제 사항 전체를 스테이징하고, 변경이 있으면 커밋한 뒤 작업 브랜치를 푸시합니다. 변경이 없어도 기존 커밋을 푸시하므로 푸시 실패 후 재시도할 수 있습니다.
 
-수동 테스트는 커밋 작성자 `Team Bronze Bot`, 이메일 `team-bronze-bot@example.com`, 메시지 `chore: apply automated code changes`를 전달합니다. 공개 모듈에서는 호출자가 값을 지정할 수 있으며, 작성자를 생략하면 기존 Git 설정을 사용합니다. 전달한 작성자 정보는 해당 커밋 명령에만 적용하고 저장소 설정을 덮어쓰지 않습니다.
+수동 테스트는 커밋 작성자 `Automation Bot`, 이메일 `automation-bot@example.com`, 메시지 `chore: apply automated code changes`를 전달합니다. 공개 모듈에서는 호출자가 값을 지정할 수 있으며, 작성자를 생략하면 기존 Git 설정을 사용합니다. 전달한 작성자 정보는 해당 커밋 명령에만 적용하고 저장소 설정을 덮어쓰지 않습니다.
 
 | 결과 상태 | 의미 |
 | --- | --- |

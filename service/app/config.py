@@ -1,0 +1,62 @@
+import os
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlsplit
+from sqlalchemy.engine import make_url
+
+DEFAULT_DATABASE_URL = "postgresql+psycopg://anyship@127.0.0.1:55432/anyship"
+
+
+@dataclass(frozen=True)
+class Settings:
+    app_origin: str = "http://localhost:8000"
+    database_url: str = field(default=DEFAULT_DATABASE_URL, repr=False)
+    github_client_id: str = ""
+    github_client_secret: str = field(default="", repr=False)
+    github_app_slug: str = ""
+    token_key: str = field(default="", repr=False)
+    demo: bool = False
+    ai_mode: str = "unavailable"
+    production: bool = False
+    frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
+
+    def __post_init__(self):
+        if self.ai_mode not in ("placeholder", "unavailable"):
+            raise ValueError("APP_AI_MODE must be placeholder or unavailable.")
+        if self.production and self.ai_mode == "placeholder":
+            raise ValueError("AI placeholder is only available in development.")
+        origin = urlsplit(self.app_origin)
+        if origin.scheme not in ("http", "https") or not origin.netloc or origin.path or origin.query or origin.fragment:
+            raise ValueError("APP_APP_ORIGIN must be an origin without a trailing slash.")
+        if self.production and (self.demo or origin.scheme != "https" or make_url(self.database_url).get_backend_name() != "postgresql"):
+            raise ValueError("Production requires HTTPS, PostgreSQL and demo disabled.")
+        if not self.demo and not self.token_key:
+            raise ValueError("Set APP_TOKEN_KEY before starting real authentication.")
+        if self.github_app_slug and not re.fullmatch(r"[A-Za-z0-9-]+", self.github_app_slug):
+            raise ValueError("APP_GITHUB_APP_SLUG must be a GitHub App slug.")
+        if self.production and not self.github_configured:
+            raise ValueError("Production requires GitHub App configuration.")
+
+    @property
+    def github_configured(self):
+        return bool(self.github_client_id and self.github_client_secret and self.github_app_slug)
+
+    @property
+    def secure_cookies(self):
+        return self.app_origin.startswith("https://")
+
+    @classmethod
+    def from_env(cls):
+        return cls(
+            app_origin=os.getenv("APP_APP_ORIGIN", "http://localhost:8000"),
+            database_url=os.getenv("APP_DATABASE_URL") or DEFAULT_DATABASE_URL,
+            github_client_id=os.getenv("APP_GITHUB_CLIENT_ID", ""),
+            github_client_secret=os.getenv("APP_GITHUB_CLIENT_SECRET", ""),
+            github_app_slug=os.getenv("APP_GITHUB_APP_SLUG", ""),
+            token_key=os.getenv("APP_TOKEN_KEY", ""),
+            demo=os.getenv("APP_DEMO", "false").lower() == "true",
+            ai_mode=os.getenv("APP_AI_MODE", "unavailable"),
+            production=os.getenv("APP_ENV", "development") == "production",
+        )
