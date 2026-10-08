@@ -4,3 +4,6 @@ __pycache__/
 .env
 .test-tmp/
 workspaces/
+build/
+dist/
+*.egg-info/

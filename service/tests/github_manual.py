@@ -10,10 +10,10 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from github.changes import commit_changes, push_branch, stage_changes
-from github.pull_request import create_pull_request, get_default_branch
-from github.repository import (
-    clone_repository, create_branch, parse_repo_url, run_git,
+from github import (
+    GitHubError,
+    GitHubRepository,
+    InvalidRepositoryError,
 )
 
 
@@ -51,33 +51,13 @@ class PullRequestCreationError(RuntimeError):
         self.branch = branch
 
 
-def validate_repository(repo_url: str, settings: Settings) -> str:
-    repository = parse_repo_url(repo_url)
-    if repository.lower() != settings.github_allowed_repo.lower():
+def get_repository(
+    repo_url: str, destination: Path, settings: Settings
+) -> GitHubRepository:
+    repo = GitHubRepository(repo_url, destination, settings.github_token)
+    if repo.repository.lower() != settings.github_allowed_repo.lower():
         raise ValueError("허용되지 않은 레포입니다.")
-    return repository
-
-
-def inspect_workspace(repo_path: Path, repository: str, base_branch: str) -> str:
-    root = Path(run_git(["rev-parse", "--show-toplevel"], cwd=repo_path)).resolve()
-    if root != repo_path:
-        raise ValueError("저장소의 최상위 디렉터리를 지정하세요.")
-
-    remote_commands = (
-        ["remote", "get-url", "--all", "origin"],
-        ["remote", "get-url", "--push", "--all", "origin"],
-    )
-    for command in remote_commands:
-        remote_urls = run_git(command, cwd=repo_path).splitlines()
-        for remote_url in remote_urls:
-            remote = parse_repo_url(remote_url)
-            if remote.lower() != repository.lower():
-                raise ValueError("작업 폴더의 원격 저장소가 요청한 저장소와 다릅니다.")
-
-    branch = run_git(["branch", "--show-current"], cwd=repo_path)
-    if not branch or branch == base_branch:
-        raise ValueError("기본 브랜치가 아닌 작업 브랜치가 필요합니다.")
-    return branch
+    return repo
 
 
 def prepare_workspace(
@@ -87,29 +67,25 @@ def prepare_workspace(
     branch: str | None = None,
     settings: Settings | None = None,
 ) -> dict:
-    settings = settings or get_settings()
-    repository = validate_repository(repo_url, settings)
-    repo_path = destination.resolve()
-    base_branch = get_default_branch(repository, settings.github_token)
+    repo = get_repository(repo_url, destination, settings or get_settings())
+    base_branch = repo.get_default_branch()
 
-    if repo_path.exists():
-        work_branch = inspect_workspace(repo_path, repository, base_branch)
-        if branch and branch != work_branch:
+    if repo.path.exists():
+        workspace = repo.inspect(base_branch=base_branch)
+        if branch and branch != workspace.branch:
             raise ValueError("기존 작업 폴더의 브랜치가 요청한 브랜치와 다릅니다.")
     else:
         work_branch = branch or f"ai/manual-{uuid.uuid4().hex[:12]}"
         if work_branch == base_branch or work_branch.startswith("-"):
             raise ValueError("유효한 작업 브랜치 이름을 지정하세요.")
-        repo_path.parent.mkdir(parents=True, exist_ok=True)
-        run_git(["check-ref-format", "--branch", work_branch], cwd=repo_path.parent)
-        clone_repository(repository, base_branch, repo_path, settings.github_token)
-        create_branch(repo_path, work_branch)
+        repo.clone(branch=base_branch)
+        workspace = repo.create_branch(work_branch)
 
     return {
         "status": "prepared",
-        "repository": repository,
-        "path": str(repo_path),
-        "branch": work_branch,
+        "repository": workspace.repository,
+        "path": str(workspace.path),
+        "branch": workspace.branch,
         "base_branch": base_branch,
     }
 
@@ -121,32 +97,38 @@ def publish_workspace(
     open_pr: bool = False,
     settings: Settings | None = None,
 ) -> dict:
-    settings = settings or get_settings()
-    repository = validate_repository(repo_url, settings)
-    repo_path = destination.resolve()
-    base_branch = get_default_branch(repository, settings.github_token)
-    branch = inspect_workspace(repo_path, repository, base_branch)
-
-    diff_summary = stage_changes(repo_path)
-    if diff_summary:
-        commit_changes(repo_path)
-    push_branch(repo_path, branch, settings.github_token)
+    repo = get_repository(repo_url, destination, settings or get_settings())
+    base_branch = repo.get_default_branch()
+    workspace = repo.inspect(base_branch=base_branch)
+    commit_result = repo.commit(
+        "chore: apply automated code changes",
+        author_name="Team Bronze Bot",
+        author_email="team-bronze-bot@example.com",
+    )
+    repo.push()
 
     result = {
         "status": "pushed",
-        "repository": repository,
-        "path": str(repo_path),
-        "branch": branch,
+        "repository": workspace.repository,
+        "path": str(workspace.path),
+        "branch": workspace.branch,
         "base_branch": base_branch,
-        "diff_summary": diff_summary,
+        "diff_summary": commit_result.summary,
     }
     if open_pr:
         try:
-            result["pull_request"] = create_pull_request(
-                repository, branch, base_branch, settings.github_token
+            pull_request = repo.create_pull_request(
+                "Automated Code Changes",
+                body="Team Bronze MVP가 생성한 자동 코드 변경 사항입니다.",
+                base=base_branch,
+                draft=True,
             )
-        except (requests.RequestException, ValueError, KeyError) as exc:
-            raise PullRequestCreationError(repository, branch) from exc
+        except GitHubError as exc:
+            raise PullRequestCreationError(workspace.repository, workspace.branch) from exc
+        result["pull_request"] = {
+            "number": pull_request.number,
+            "url": pull_request.url,
+        }
         result["status"] = "created"
     return result
 
@@ -199,9 +181,13 @@ def run_manual_test(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "prepare":
-            result = prepare_workspace(args.repo_url, args.directory, branch=args.branch)
+            result = prepare_workspace(
+                args.repo_url, args.directory, branch=args.branch
+            )
         else:
-            result = publish_workspace(args.repo_url, args.directory, open_pr=args.pr)
+            result = publish_workspace(
+                args.repo_url, args.directory, open_pr=args.pr
+            )
     except PullRequestCreationError as exc:
         report_error(
             "브랜치 푸시 후 PR 생성 결과를 확인하지 못했습니다. 재실행 전에 GitHub를 확인하세요.",
@@ -210,10 +196,10 @@ def run_manual_test(argv: list[str] | None = None) -> int:
             branch=exc.branch,
         )
         return 3
-    except ConfigurationError as exc:
+    except (ConfigurationError, InvalidRepositoryError) as exc:
         report_error(str(exc), args.json_output)
         return 2
-    except (subprocess.SubprocessError, requests.RequestException, OSError):
+    except (GitHubError, subprocess.SubprocessError, requests.RequestException, OSError):
         report_error(
             "Git 또는 GitHub 작업에 실패했습니다. 설치·권한·네트워크를 확인하세요.",
             args.json_output,

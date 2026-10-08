@@ -24,16 +24,20 @@ def create_pull_request(
     branch: str,
     base: str,
     token: str,
+    *,
+    title: str = "Automated Code Changes",
+    body: str = "Team Bronze MVP가 생성한 자동 코드 변경 사항입니다.",
+    draft: bool = True,
 ) -> dict:
     response = requests.post(
         f"https://api.github.com/repos/{repo}/pulls",
         headers=github_headers(token),
         json={
-            "title": "Automated Code Changes",
+            "title": title,
             "head": branch,
             "base": base,
-            "body": "Team Bronze MVP가 생성한 자동 코드 변경 사항입니다.",
-            "draft": True,
+            "body": body,
+            "draft": draft,
         },
         timeout=20,
     )

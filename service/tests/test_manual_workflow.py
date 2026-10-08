@@ -6,6 +6,7 @@ import requests
 
 from github.changes import commit_changes, stage_changes
 from github.repository import run_git
+from github import GitCommandError, Workspace
 from tests.github_manual import (
     PullRequestCreationError,
     Settings,
@@ -34,9 +35,9 @@ def workspace(tmp_path):
 @pytest.fixture
 def remote_operations():
     with (
-        patch("tests.github_manual.get_default_branch", return_value="main"),
-        patch("tests.github_manual.push_branch") as push,
-        patch("tests.github_manual.create_pull_request", return_value={"number": 1, "url": URL + "/pull/1"}) as pr,
+        patch("github.pull_request.get_default_branch", return_value="main"),
+        patch("github.changes.push_branch") as push,
+        patch("github.pull_request.create_pull_request", return_value={"number": 1, "url": URL + "/pull/1"}) as pr,
     ):
         yield push, pr
 
@@ -44,15 +45,16 @@ def remote_operations():
 def test_prepare_new_directory(tmp_path, remote_operations):
     destination = tmp_path / "nested" / "repository"
     with (
-        patch("tests.github_manual.clone_repository") as clone,
-        patch("tests.github_manual.create_branch") as branch,
+        patch("tests.github_manual.GitHubRepository.clone") as clone,
+        patch("tests.github_manual.GitHubRepository.create_branch") as branch,
     ):
-        clone.side_effect = lambda repo, base, path, token: path.mkdir()
+        clone.side_effect = lambda **kwargs: destination.mkdir(parents=True)
+        branch.return_value = Workspace("owner/repo", destination, "work")
         result = prepare_workspace(URL, destination, branch="work", settings=SETTINGS)
     assert destination.exists()
     assert result["status"] == "prepared"
-    clone.assert_called_once_with("owner/repo", "main", destination, "test-token")
-    branch.assert_called_once_with(destination, "work")
+    clone.assert_called_once_with(branch="main")
+    branch.assert_called_once_with("work")
     remote_operations[0].assert_not_called()
 
 
@@ -68,7 +70,7 @@ def test_prepare_reuses_matching_workspace_without_touching_changes(workspace, r
 def test_prepare_refuses_existing_unrelated_directory(tmp_path, remote_operations):
     target = tmp_path / "keep.txt"
     target.write_text("keep", encoding="utf-8")
-    with pytest.raises((ValueError, subprocess.CalledProcessError)):
+    with pytest.raises((ValueError, GitCommandError)):
         prepare_workspace(URL, tmp_path, settings=SETTINGS)
     assert target.read_text(encoding="utf-8") == "keep"
 
@@ -96,7 +98,12 @@ def test_publish_pushes_existing_commits_without_new_changes(workspace, remote_o
 def test_optional_pr(workspace, remote_operations):
     result = publish_workspace(URL, workspace, open_pr=True, settings=SETTINGS)
     assert result["status"] == "created"
-    remote_operations[1].assert_called_once_with("owner/repo", "work", "main", "test-token")
+    remote_operations[1].assert_called_once_with(
+        "owner/repo", "work", "main", "test-token",
+        title="Automated Code Changes",
+        body="Team Bronze MVP가 생성한 자동 코드 변경 사항입니다.",
+        draft=True,
+    )
 
 
 def test_pr_failure_keeps_workspace(workspace, remote_operations):
@@ -139,7 +146,7 @@ def test_prepare_rejects_branch_mismatch(workspace, remote_operations):
 def test_push_failure_preserves_commit_for_retry(workspace, remote_operations):
     (workspace / "retry.txt").write_text("retry", encoding="utf-8")
     remote_operations[0].side_effect = subprocess.CalledProcessError(1, "git")
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(GitCommandError):
         publish_workspace(URL, workspace, open_pr=True, settings=SETTINGS)
     assert run_git(["show", "HEAD:retry.txt"], cwd=workspace) == "retry"
     remote_operations[1].assert_not_called()

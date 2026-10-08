@@ -22,20 +22,20 @@ def stage_changes(repo_path: Path) -> str:
     return run_git(["diff", "--cached", "--stat"], cwd=repo_path)
 
 
-def commit_changes(repo_path: Path) -> None:
-    run_git(
-        ["config", "user.name", "Team Bronze Bot"],
-        cwd=repo_path,
-    )
-    run_git(
-        ["config", "user.email", "team-bronze-bot@example.com"],
-        cwd=repo_path,
-    )
+def commit_changes(
+    repo_path: Path,
+    message: str = "chore: apply automated code changes",
+    *,
+    author_name: str | None = "Team Bronze Bot",
+    author_email: str | None = "team-bronze-bot@example.com",
+) -> None:
+    author_options: list[str] = []
+    if author_name is not None:
+        author_options.extend(["-c", f"user.name={author_name}"])
+    if author_email is not None:
+        author_options.extend(["-c", f"user.email={author_email}"])
 
-    run_git(
-        ["commit", "-m", "chore: apply automated code changes"],
-        cwd=repo_path,
-    )
+    run_git([*author_options, "commit", "-m", message], cwd=repo_path)
 
 
 def push_branch(

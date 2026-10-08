@@ -1,8 +1,114 @@
-# GitHub 모듈 테스트 가이드
+# GitHub 모듈 사용 및 테스트 가이드
 
 `github/`는 저장소 복제, 브랜치 생성, 변경 확인, 커밋·푸시, PR 생성을 담당하는 모듈입니다. `tests/github_manual.py`는 이 기능들을 연결해 실제 GitHub 저장소에서 실행하는 수동 테스트입니다.
 
 자동 테스트부터 실행한 뒤, 수동 테스트의 `prepare`로 작업 폴더를 준비하고 직접 파일을 수정합니다. 마지막으로 `publish`를 실행하면 변경 사항을 커밋·푸시합니다. HTTP 서버를 실행할 필요는 없습니다.
+
+## 다른 프로젝트에서 모듈 사용
+
+공개 인터페이스는 `from github import ...`입니다. 하위 파일의 함수는 내부 구현이며, 호출 코드는 `GitHubRepository`를 사용하세요.
+
+다른 프로젝트의 Python 환경에서 이 저장소의 `service` 경로를 지정해 설치합니다. 예시 경로는 자신의 체크아웃 위치로 바꿉니다.
+
+```powershell
+python -m pip install "C:\path\to\team-bronze\service"
+```
+
+모듈 개발 환경에서는 `service` 안에서 편집 가능 설치를 사용할 수 있습니다.
+
+```powershell
+python -m pip install -e ".[test]"
+```
+
+설정과 코드 수정은 호출자가 담당합니다. 객체를 생성하는 것만으로 파일이나 네트워크 작업을 수행하지 않습니다. 다음 코드는 각 메서드를 호출할 때 실제 복제·커밋·푸시·PR 생성을 수행하는 예시입니다. `repo.clone()`에는 아직 존재하지 않는 대상 경로를 사용하세요.
+
+```python
+import os
+
+from github import GitHubRepository
+
+repo = GitHubRepository(
+    url="https://github.com/owner/repo",
+    path="./workspaces/repo",
+    token=os.environ["GITHUB_TOKEN"],
+)
+
+repo.clone()
+repo.create_branch("work/update-docs")
+
+readme = repo.path / "README.md"
+text = readme.read_text(encoding="utf-8")
+readme.write_text(text + "\nUpdated documentation.\n", encoding="utf-8")
+(repo.path / "hello.py").write_text('print("hello")\n', encoding="utf-8")
+
+print(repo.get_changes())
+commit = repo.commit(
+    "docs: update documentation and example",
+    author_name="Example Developer",
+    author_email="developer@example.com",
+)
+print(commit.created, commit.sha)
+repo.push()
+
+pr = repo.create_pull_request(
+    title="Update documentation and example",
+    body="Add usage details and a Python example.",
+    draft=True,
+)
+print(pr.number, pr.url)
+```
+
+이미 복제된 저장소는 같은 경로로 객체를 만든 뒤 `inspect()`로 확인하면 됩니다. 다시 `clone()`하지 않습니다. 라이브러리는 `.env`를 자동 로드하지 않으며 `GITHUB_ALLOWED_REPO`도 읽지 않습니다. 호출자가 접근 범위를 결정해야 합니다.
+
+| 메서드 | 반환값과 동작 |
+| --- | --- |
+| `clone(branch=None)` | `Path`. 기본 브랜치 또는 지정 브랜치를 새 경로에 복제 |
+| `get_default_branch()` | `str`. GitHub 기본 브랜치 조회 |
+| `inspect(base_branch=None)` | `Workspace(repository, path, branch)`. 루트 경로·원격 URL·현재 브랜치 확인. `base_branch`를 전달하면 해당 브랜치도 거부 |
+| `create_branch(name)` | `Workspace`. 새 브랜치 생성·전환 |
+| `get_changes()` | `str`. 새 파일을 포함한 변경 상태 |
+| `get_diff()` | `str`. HEAD 대비 추적 파일 변경 내용. 미추적 파일 내용은 제외 |
+| `commit(message, author_name=None, author_email=None)` | `CommitResult(created, sha, summary)`. 전체 변경 스테이징·커밋. 변경이 없으면 `created=False`, `sha=None` |
+| `push()` | `PushResult(repository, branch)`. 현재 작업 브랜치 푸시. 기본 브랜치·detached HEAD는 거부 |
+| `create_pull_request(title, body="", base=None, draft=True)` | `PullRequest(number, url)`. 푸시된 현재 브랜치의 PR 생성. 자체 커밋·푸시는 하지 않음 |
+
+결과 객체는 변경 불가능한 dataclass입니다. `.url`, `.sha`처럼 속성으로 접근할 수 있습니다. 기본 브랜치 푸시 제한은 `push()`에 적용되며, `commit()`은 현재 브랜치의 로컬 커밋을 수행합니다. 커밋 전에도 기본 브랜치를 제한하려면 `inspect(base_branch=repo.get_default_branch())`로 확인하세요.
+
+### 오류 처리
+
+```python
+from github import AuthenticationError, GitCommandError, GitHubError
+
+try:
+    repo.push()
+except AuthenticationError:
+    print("GitHub 토큰, 권한 또는 접근 정책을 확인하세요.")
+except GitCommandError:
+    print("Git 실행 환경, 인증 또는 브랜치 상태를 확인하세요.")
+except GitHubError as error:
+    print(str(error))
+```
+
+| 예외 | 의미 |
+| --- | --- |
+| `GitHubError` | 공개 모듈 예외의 공통 부모 |
+| `ValidationError` | 빈 커밋 메시지·PR 제목 등 잘못된 입력 |
+| `InvalidRepositoryError` | 잘못된 URL, 기존 복제 경로, 원격 불일치 등. `ValidationError`의 하위 타입 |
+| `AuthenticationError` | 빈 토큰 또는 HTTP 401·403 접근 거부. 권한 외에 GitHub 정책·제한도 확인 |
+| `GitCommandError` | Git 실행·시간 초과·로컬 파일 작업 실패. Git을 통한 인증 실패도 이 타입으로 반환 |
+| `GitHubAPIError` | GitHub 네트워크·응답 오류. HTTP 오류는 `status_code`로 확인 가능 |
+
+공개 예외 메시지에는 원본 Git 출력이나 HTTP 인증 데이터를 포함하지 않습니다. 실패 후 자동 삭제·강제 푸시·재시도는 하지 않으며, 호출자가 남은 작업 상태를 확인해 후속 조치를 결정합니다.
+
+## 패키지 파일 만들기
+
+`service`에서 실행하면 `dist`에 wheel 파일이 생성됩니다. 테스트 코드, `.env`, 작업 저장소는 패키지에 포함되지 않습니다.
+
+```powershell
+python -m pip wheel --no-deps . --wheel-dir dist
+```
+
+생성한 `github-0.1.0-py3-none-any.whl`을 다른 환경에서 `python -m pip install <wheel 경로>`로 설치할 수 있습니다. 외부 패키지 저장소에는 자동 게시하지 않습니다.
 
 ## 1. 실행 환경 준비
 
@@ -42,7 +148,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pytest tests -q
 ```
 
-현재 테스트 구성은 47개입니다. 특정 기능만 확인하려면 파일을 지정합니다.
+현재 테스트 구성은 63개입니다. 특정 기능만 확인하려면 파일을 지정합니다.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_repository.py -v
@@ -147,7 +253,7 @@ Draft PR도 만들려면 위 명령 대신 다음을 실행합니다.
 
 **이 단계는 실제 GitHub를 변경합니다.** Git이 무시하지 않는 수정·추가·삭제 사항 전체를 스테이징하고, 변경이 있으면 커밋한 뒤 작업 브랜치를 푸시합니다. 변경이 없어도 기존 커밋을 푸시하므로 푸시 실패 후 재시도할 수 있습니다.
 
-현재 커밋 작성자는 `Team Bronze Bot`, 이메일은 `team-bronze-bot@example.com`, 메시지는 `chore: apply automated code changes`로 고정되어 있습니다. 작성자 설정은 대상 로컬 저장소에 적용됩니다.
+수동 테스트는 커밋 작성자 `Team Bronze Bot`, 이메일 `team-bronze-bot@example.com`, 메시지 `chore: apply automated code changes`를 전달합니다. 공개 모듈에서는 호출자가 값을 지정할 수 있으며, 작성자를 생략하면 기존 Git 설정을 사용합니다. 전달한 작성자 정보는 해당 커밋 명령에만 적용하고 저장소 설정을 덮어쓰지 않습니다.
 
 | 결과 상태 | 의미 |
 | --- | --- |

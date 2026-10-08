@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "github"
+version = "0.1.0"
+description = "Reusable GitHub repository operations"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["requests>=2.31,<3"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "python-dotenv>=1"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["github", "github.*"]
+
+[tool.setuptools.package-data]
+github = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -24,6 +24,9 @@ def parse_repo_url(url: str) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path):
         raise ValueError("올바른 GitHub 레포 URL이 아닙니다.")
 
+    if any(part in (".", "..") for part in path.split("/")):
+        raise ValueError("올바른 GitHub 레포 URL이 아닙니다.")
+
     return path
 
 
