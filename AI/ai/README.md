@@ -25,6 +25,11 @@ PyCharm은 Existing environment에서 현재 프로젝트의 `ai/.venv/bin/pytho
 
 ## 출력과 상태
 
+DB 변환안은 `psycopg2`로 통일한다. 설치 패키지는 `psycopg2-binary`다.
+어댑터는 `postgresql://` 주소를 주입하고 변환된 앱이 `postgresql+psycopg2://`로
+드라이버를 명시한다. 실행 검증은 자체 샘플의 임시 복사본과 임시 Postgres에 한정한다.
+실제 사용자 앱은 risky 변경안만 제공하며 기존 데이터 자동 이전은 지원하지 않는다.
+
 ```text
 out/
   diagnosis.json

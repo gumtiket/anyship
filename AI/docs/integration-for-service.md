@@ -45,6 +45,20 @@ finally:
 - `--llm replay`는 분석 로직을 현재 실행하며 저장된 LLM 응답만 재생한다. 새 AWS 호출·토큰·비용은 0이고 source=llm_replay다. calls는 로컬 재생 횟수다.
 - 현재 `pr_eligible=false`다. 캐시/replay/skipped를 실제 사용자 앱의 검증 또는 승인으로 바꾸지 않는다.
 
+## Postgres 드라이버 계약 (B 선택)
+
+SQLite 변환안은 psycopg2 드라이버를 사용한다. 설치 패키지는 `psycopg2-binary`이며,
+기존에 psycopg2 또는 psycopg2-binary가 선언되어 있으면 중복 추가하지 않는다.
+C는 `DATABASE_URL=postgresql://...`을 주입하고, 변환된 앱이 내부에서
+`postgresql+psycopg2://...`로 바꿔 SQLAlchemy의 드라이버 선택을 명시한다.
+명세에 드라이버 필드를 추가하지 않는다. 기존 psycopg3 의존성은 임의로 삭제하지 않는다.
+
+게이트도 같은 일반 URL을 주입하여 자체 샘플의 임시 Postgres 초기화·CRUD·재시작 후
+읽기를 확인한다. 실제 사용자 앱은 변경안만 생성하며 DB 변경은 risky/승인 필요다.
+기존 SQLite 데이터는 자동으로 이전되지 않는다. 어댑터의 마이그레이션 실행은 이미지
+컨테이너 내부·앱 DB 계정·시간 제한 조건을 C가 강제해야 한다. 샘플 검증의 DB 계정은
+임시 검증용이므로 이 운영 권한 조건까지 검증한 것으로 해석하지 않는다.
+
 ## 확정 필요
 
 | 계약 | 현재 값/경계 | 확정할 담당 |

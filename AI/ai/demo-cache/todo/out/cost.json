@@ -6,7 +6,7 @@
       "input_tokens": 3568,
       "output_tokens": 1487,
       "cost_usd": null,
-      "latency_s": 10.002408541971818
+      "latency_s": 10.445651250018273
     },
     {
       "stage": "recommend",
@@ -14,7 +14,7 @@
       "input_tokens": 431,
       "output_tokens": 123,
       "cost_usd": null,
-      "latency_s": 1.6613428330165334
+      "latency_s": 1.6175815000315197
     }
   ],
   "stages": {

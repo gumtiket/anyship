@@ -315,7 +315,7 @@ def test_pipeline_repair_final_diff_and_trace_match_updated_context(tmp_path, sa
         ) as workspace:
             workspace.apply(diff)
             assert workspace.compile()
-            assert "psycopg[binary]" in (workspace.root / "requirements.txt").read_text()
+            assert "psycopg2-binary" in (workspace.root / "requirements.txt").read_text()
         assert result.cost.total.calls == 2 and result.cost.stages["repair"].calls == 2
         trace = json.loads(Path(result.output_files["llm-trace.json"]).read_text())
         assert len(trace["exchanges"]) == 2

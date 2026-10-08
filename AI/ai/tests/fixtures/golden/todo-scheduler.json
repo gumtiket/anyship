@@ -219,5 +219,5 @@
   },
   "dockerfile_sha256": "6e8eb3df1849e89b0490123dd3902f32461dbbfb250f688ff991242e776ad108",
   "dockerfile_lint": [],
-  "diff_sha256": "d02e93493ae81d8b7d4aaec10c83f7789922db89e77a4a8a21557a0f6a57cf9a"
+  "diff_sha256": "12bc7d6f1bfd1340440dc1156ebde26cccfcf041b86eed11d9c05dd1ecb2afc9"
 }

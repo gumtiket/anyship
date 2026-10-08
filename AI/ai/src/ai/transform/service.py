@@ -3,6 +3,8 @@ import hashlib
 import json
 from importlib.resources import files
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 from pydantic import Field
 
 from ai.detectors import RepoView, detect, detect_framework, detect_signals
@@ -37,6 +39,19 @@ def _classes(source: str) -> list[str]:
     ]
 
 
+def _driver_dependency_allowed(line: str) -> bool:
+    try:
+        dependency = Requirement(line)
+    except InvalidRequirement:
+        return False
+    return (
+        canonicalize_name(dependency.name) == "psycopg2-binary"
+        and not dependency.extras
+        and dependency.url is None
+        and dependency.marker is None
+    )
+
+
 def _check_semantics(before: dict[str, str], after: dict[str, str], paths: set[str]) -> None:
     forbidden = {
         "eval",
@@ -55,9 +70,7 @@ def _check_semantics(before: dict[str, str], after: dict[str, str], paths: set[s
             if path.endswith("requirements.txt"):
                 old = {line.strip() for line in before.get(path, "").splitlines() if line.strip()}
                 new = {line.strip() for line in after[path].splitlines() if line.strip()}
-                if old - new or any(
-                    not line.lower().startswith("psycopg[binary]") for line in new - old
-                ):
+                if old - new or any(not _driver_dependency_allowed(line) for line in new - old):
                     raise ValueError("dependency_change_not_allowed")
             else:
                 raise ValueError("non_python_change_not_allowed")

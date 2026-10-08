@@ -57,7 +57,7 @@ def run_gate(
     run_id = "bronze-gate-" + secrets.token_hex(6)
     network = run_id + "-net"
     password = secrets.token_urlsafe(24)
-    database = f"postgresql+psycopg://gate:{password}@{run_id}-db:5432/gate"
+    database = f"postgresql://gate:{password}@{run_id}-db:5432/gate"
     sensitive = [password, database]
     containers = []
     images = []

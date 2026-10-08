@@ -14,7 +14,8 @@ from ai.models import Diagnosis
 from ai.pipeline import run_analysis
 from ai.security import SourceMasker
 from ai.transform import llm_patch, propose
-from ai.transform.service import identify_sample
+from ai.transform.service import _check_semantics, identify_sample
+from ai.transform.templates import template_changes
 from ai.transform.workspace import Workspace, make_diff, patch_paths, source_files
 
 SAMPLES = Path(__file__).resolve().parents[2] / "samples"
@@ -100,7 +101,7 @@ def test_enrichment_schema_failure_falls_back_without_leaking_source():
 
 
 @pytest.mark.parametrize("name", ["todo", "todo-scheduler"])
-def test_templates_produce_valid_cumulative_diff_and_preserve_models(name):
+def test_templates_produce_valid_cumulative_diff_and_preserve_models(name, monkeypatch):
     repo = RepoView(SAMPLES / name)
     before = source_files(repo)
     diff, report = propose(repo, diagnosis(repo))
@@ -119,7 +120,7 @@ def test_templates_produce_valid_cumulative_diff_and_preserve_models(name):
         assert "logging.StreamHandler(sys.stdout)" in after["app/main.py"]
         assert 'os.environ.get("PORT", "8080")' in after["app/main.py"]
         assert '@app.get("/healthz")' in after["app/main.py"]
-        assert "psycopg[binary]" in after["requirements.txt"]
+        assert "psycopg2-binary" in after["requirements.txt"]
         old_classes = [
             ast.dump(n)
             for n in ast.walk(ast.parse(before["app/db.py"]))
@@ -132,6 +133,57 @@ def test_templates_produce_valid_cumulative_diff_and_preserve_models(name):
         ]
         assert old_classes == new_classes
         assert workspace.compile()
+        # Execute only the owned sample's temporary db module; engine creation does not connect.
+        monkeypatch.setenv(
+            "DATABASE_URL", "postgresql://dummy:dummy-secret-do-not-use@db.invalid/sample"
+        )
+        module_spec = importlib.util.spec_from_file_location(
+            "transformed_sample_db", workspace.root / "app/db.py"
+        )
+        module = importlib.util.module_from_spec(module_spec)
+        module_spec.loader.exec_module(module)
+        try:
+            assert module.engine.dialect.driver == "psycopg2"
+            assert module.engine.dialect.dbapi.__name__ == "psycopg2"
+        finally:
+            module.engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "declaration,added",
+    [
+        ("psycopg[binary]>=3", True),
+        ("# psycopg2-binary is not installed", True),
+        ('psycopg2-binary; python_version < "3.10"', True),
+        ("psycopg2-binary==2.9.13", False),
+        ("psycopg2>=2.9", False),
+    ],
+)
+def test_driver_dependency_is_added_even_when_psycopg3_or_a_comment_exists(declaration, added):
+    repo = RepoView(SAMPLES / "todo")
+    before = source_files(repo)
+    original = before["requirements.txt"].rstrip() + "\n" + declaration + "\n"
+    before["requirements.txt"] = original
+    after, _ = template_changes(before, diagnosis(repo), SourceMasker(repo), None)
+    assert after["requirements.txt"] == original + ("psycopg2-binary\n" if added else "")
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "psycopg2-binary-unrelated",
+        "psycopg[binary]",
+        "psycopg2-binary @ https://example.invalid/driver.whl",
+        'psycopg2-binary; python_version < "3.10"',
+    ],
+)
+def test_patch_guard_rejects_driver_prefix_impersonation_and_alternative_sources(declaration):
+    with pytest.raises(ValueError, match="dependency_change_not_allowed"):
+        _check_semantics(
+            {"requirements.txt": "fastapi\n"},
+            {"requirements.txt": "fastapi\n" + declaration + "\n"},
+            {"requirements.txt"},
+        )
 
 
 def test_non_dummy_secret_file_is_masked_and_deferred(tmp_path):

@@ -1,8 +1,27 @@
 import ast
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
+
 from ai.detectors.repo import aliases, qualified
 from ai.models import Diagnosis, EnvVar, TransformReport, WarningItem
 from ai.security import DUMMY_SECRET, SourceMasker, credential_name, edit_nodes
+
+
+def has_psycopg2(requirements: str) -> bool:
+    """Only an unconditional psycopg2 distribution supplies the selected driver."""
+    for line in requirements.splitlines():
+        try:
+            dependency = Requirement(line.split(" #", 1)[0].strip())
+        except InvalidRequirement:
+            continue
+        if (
+            canonicalize_name(dependency.name) in {"psycopg2", "psycopg2-binary"}
+            and dependency.marker is None
+            and dependency.url is None
+        ):
+            return True
+    return False
 
 
 def add_imports(source: str, modules: set[str]) -> str:
@@ -92,7 +111,7 @@ def template_changes(
                     copied = ast.parse(ast.unparse(node), mode="eval").body
                     copied.args[0] = ast.parse(
                         'os.environ["DATABASE_URL"].replace('
-                        '"postgresql://", "postgresql+psycopg://", 1)',
+                        '"postgresql://", "postgresql+psycopg2://", 1)',
                         mode="eval",
                     ).body
                     for keyword in copied.keywords:
@@ -212,8 +231,8 @@ def template_changes(
                     message="선언 파일의 민감 URI 노출 방지를 위해 드라이버 추가를 보류했습니다.",
                 )
             )
-        elif requirements is not None and "psycopg" not in after[requirements].lower():
-            after[requirements] = after[requirements].rstrip() + "\npsycopg[binary]\n"
+        elif requirements is not None and not has_psycopg2(after[requirements]):
+            after[requirements] = after[requirements].rstrip() + "\npsycopg2-binary\n"
         elif requirements is None:
             report.warnings.append(
                 WarningItem(
