@@ -3,12 +3,15 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
+from sqlalchemy.engine import make_url
+
+DEFAULT_DATABASE_URL = "postgresql+psycopg://anyship@127.0.0.1:55432/anyship"
 
 
 @dataclass(frozen=True)
 class Settings:
     app_origin: str = "http://localhost:8000"
-    database_url: str = "sqlite:///./app.db"
+    database_url: str = field(default=DEFAULT_DATABASE_URL, repr=False)
     github_client_id: str = ""
     github_client_secret: str = field(default="", repr=False)
     github_app_slug: str = ""
@@ -27,7 +30,7 @@ class Settings:
         origin = urlsplit(self.app_origin)
         if origin.scheme not in ("http", "https") or not origin.netloc or origin.path or origin.query or origin.fragment:
             raise ValueError("APP_APP_ORIGIN must be an origin without a trailing slash.")
-        if self.production and (self.demo or origin.scheme != "https" or self.database_url.startswith("sqlite")):
+        if self.production and (self.demo or origin.scheme != "https" or make_url(self.database_url).get_backend_name() != "postgresql"):
             raise ValueError("Production requires HTTPS, PostgreSQL and demo disabled.")
         if not self.demo and not self.token_key:
             raise ValueError("Set APP_TOKEN_KEY before starting real authentication.")
@@ -48,7 +51,7 @@ class Settings:
     def from_env(cls):
         return cls(
             app_origin=os.getenv("APP_APP_ORIGIN", "http://localhost:8000"),
-            database_url=os.getenv("APP_DATABASE_URL", "sqlite:///./app.db"),
+            database_url=os.getenv("APP_DATABASE_URL") or DEFAULT_DATABASE_URL,
             github_client_id=os.getenv("APP_GITHUB_CLIENT_ID", ""),
             github_client_secret=os.getenv("APP_GITHUB_CLIENT_SECRET", ""),
             github_app_slug=os.getenv("APP_GITHUB_APP_SLUG", ""),

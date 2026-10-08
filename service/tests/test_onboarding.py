@@ -18,11 +18,11 @@ URL = f"https://github.com/{NAME}"
 
 
 @pytest.fixture
-def onboarding(tmp_path, monkeypatch):
+def onboarding(database_url, monkeypatch):
     remote = GitHubHTTP()
     with httpx.Client(transport=httpx.MockTransport(remote)) as transport:
         monkeypatch.setattr(httpx, "request", transport.request)
-        app = create_app(Settings(database_url=f"sqlite:///{tmp_path / 'test.db'}",
+        app = create_app(Settings(database_url=database_url,
             token_key=Fernet.generate_key().decode(), github_client_id="test", github_client_secret="test", github_app_slug="anyship"))
         Base.metadata.create_all(app.state.engine)
         with TestClient(app, base_url=ORIGIN) as client:

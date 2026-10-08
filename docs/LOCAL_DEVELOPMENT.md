@@ -18,7 +18,49 @@ PowerShell 실행이 제한되어 있다면 같은 작업을 Python으로 실행
 .\service\.venv\Scripts\python.exe scripts/local_web.py
 ```
 
-스크립트는 `service/.env.github.local`이 없으면 생성하고, 토큰 암호화 키가 비어 있으면 출력 없이 저장합니다. 기존 값은 보존합니다. DB 마이그레이션 후 127.0.0.1:8000으로 서버를 실행합니다. GitHub 설정이 없으면 연결 대기 화면을 표시합니다. `-CheckOnly` 또는 `--check`로 준비 상태만 확인할 수 있습니다.
+스크립트는 `service/.env.github.local`이 없으면 생성하고, 토큰 암호화 키가 비어 있으면 출력 없이 저장합니다. 기존 값은 보존합니다. DB 접속 설정이 비어 있으면 아래의 프로젝트 전용 PostgreSQL을 준비하고 비밀번호가 포함된 접속 정보를 로컬 설정에 저장합니다. 이 프로젝트에서 관리하는 DB는 자동으로 시작한 뒤 마이그레이션을 적용합니다. 외부 DB 주소를 지정하면 해당 서버에 연결합니다. 이후 127.0.0.1:8000으로 서버를 실행합니다. GitHub 설정이 없으면 연결 대기 화면을 표시합니다. `-CheckOnly` 또는 `--check`는 설정과 화면 빌드 유무만 확인하며 실제 DB 연결을 검증하지 않습니다.
+
+## 로컬 PostgreSQL
+
+웹 서비스의 기본 DB는 PostgreSQL입니다. FastAPI는 Uvicorn으로 직접 실행하고 DB도 별도 PostgreSQL 프로세스로 실행합니다. Docker는 필요하지 않습니다.
+
+이 PC에는 [PostgreSQL Windows 안내](https://www.postgresql.org/download/windows/)에서 연결하는 [EDB 바이너리](https://www.enterprisedb.com/download-postgresql-binaries)의 PostgreSQL 18.6을 `.local/pgsql`에 준비했습니다. 새 PC에서는 PostgreSQL 실행 파일을 설치하거나 압축을 풀어 `pgsql/bin`, `pgsql/lib`, `pgsql/share`가 `.local/pgsql` 아래에 있도록 배치하세요. 다른 위치라면 `ANYSHIP_POSTGRES_BIN` 환경 변수로 `bin` 경로를 지정할 수 있습니다. 도우미는 PATH와 Windows 기본 설치 경로도 확인합니다.
+
+저장소 루트에서 다음 명령을 사용합니다.
+
+```powershell
+.\service\.venv\Scripts\python.exe scripts/local_postgres.py start
+.\scripts\start-local.ps1
+```
+
+- 접속 위치: `127.0.0.1:55432`, 서비스 DB: `anyship`, 자동 테스트 DB: `anyship_test`
+- 앱 계정: `anyship`. 임의 비밀번호를 생성하며 슈퍼유저·DB 생성·역할 생성 권한은 부여하지 않습니다.
+- 인증: SCRAM 비밀번호 인증. DB는 이 PC의 루프백 주소에서만 접속할 수 있습니다.
+- 데이터와 관리용 설정: `.local/postgres/`. 서비스 접속 정보: `service/.env.github.local`의 `APP_DATABASE_URL`
+- `.local/`과 실제 `.env` 파일은 Git에서 제외됩니다. `.local/postgres/data`를 삭제하면 로컬 PostgreSQL 데이터가 사라집니다.
+
+서비스를 종료해도 PostgreSQL은 백그라운드에서 실행됩니다. 상태 확인과 DB 종료는 다음과 같습니다.
+
+```powershell
+.\service\.venv\Scripts\python.exe scripts/local_postgres.py status
+# AnyShip 서버를 종료한 뒤 실행합니다. DB 파일은 보존됩니다.
+.\service\.venv\Scripts\python.exe scripts/local_postgres.py stop
+```
+
+별도 PostgreSQL 서버를 사용하는 경우 `service/.env.github.local`에 `APP_DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/anyship` 형태로 실제 접속 정보를 저장합니다. 비밀번호의 특수문자는 URL 인코딩해야 합니다. 운영 DB의 TLS·접근 정책은 해당 제공 환경에 맞게 설정해야 하며, 위 로컬 DB 도우미는 운영 인프라를 구성하지 않습니다.
+
+### 기존 SQLite 데이터 이전
+
+기존 SQLite URL이 설정되어 있으면 실행 스크립트가 임의로 바꾸지 않습니다. 이전하려면 AnyShip 서버와 해당 SQLite에 쓰는 다른 프로세스를 종료한 후 다음을 실행합니다.
+
+```powershell
+.\service\.venv\Scripts\python.exe scripts/migrate_local_database.py
+.\scripts\start-local.ps1
+```
+
+이전 도구는 현재 로컬 설정의 SQLite DB와 설정 파일을 `.local/backups/<실행 시각>/`에 백업하고, 프로젝트 전용 PostgreSQL에 테이블을 생성합니다. 대상에 데이터가 있으면 덮어쓰지 않고 중단합니다. 현재 마이그레이션 버전·테이블·열 구성을 확인한 후 외래 키 순서대로 복사하고 전체 행의 내용을 비교합니다. 복사나 검증이 실패하면 데이터 입력 트랜잭션을 취소하며 SQLite 설정을 유지합니다. 성공한 뒤에만 `APP_DATABASE_URL`을 PostgreSQL로 변경합니다. 원본 SQLite와 GitHub 토큰 암호화 키는 유지합니다.
+
+SQLite로 되돌릴 때는 서버를 종료하고 백업 `profile.env`에 있는 원래 `APP_DATABASE_URL`만 로컬 설정에 복원하세요. 전환 이후 PostgreSQL에 추가된 데이터는 SQLite로 자동 역이전되지 않습니다.
 
 ## GitHub App 설정 — 서비스 운영자가 한 번 진행
 
@@ -70,13 +112,14 @@ APP_ENV=development
 APP_DEMO=false
 APP_AI_MODE=placeholder
 APP_APP_ORIGIN=http://localhost:8000
-APP_DATABASE_URL=sqlite:///./anyship-local.db
+# 비워 두면 실행 도우미가 프로젝트 전용 PostgreSQL 접속 정보를 생성합니다.
+APP_DATABASE_URL=
 # APP_TOKEN_KEY는 실행 스크립트가 생성합니다. 기존 키를 교체하면 재로그인이 필요합니다.
 ```
 
 `APP_AI_MODE=unavailable`이면 AI 작업을 차단합니다. 실제 AI 제공자가 구현되기 전에는 운영 환경에서 임시 분석 기능을 사용할 수 없습니다. 이전 데모 DB와 실제 GitHub DB는 분리하여 기존 샘플 계정이 실제 작업에 사용되지 않게 합니다. 예전 `-Mode demo` 실행은 지원하지 않으며 기본 실행은 GitHub 모드입니다. 이전 데이터 보존을 위해 데모 테이블과 격리된 레거시 API는 남아 있지만 AnyShip 화면에서는 사용하지 않습니다.
 
-Python 3.12 이상, Node.js 22 이상과 pnpm을 준비한 새 환경에서는 다음을 실행합니다.
+Python 3.12 이상, Node.js 22 이상, pnpm과 PostgreSQL 실행 파일을 준비한 새 환경에서는 다음을 실행합니다.
 
 ```powershell
 cd service
@@ -100,14 +143,16 @@ cd service
 ## 검증과 현재 한계
 
 ```powershell
-cd service
-.\.venv\Scripts\python.exe -m pytest tests -q
-cd ..\frontend
+# 저장소 루트에서 실행. 실제 서비스 DB와 분리된 PostgreSQL DB를 사용합니다.
+.\service\.venv\Scripts\python.exe scripts/local_postgres.py test
+cd frontend
 pnpm build
 ```
+
+위 명령은 PostgreSQL의 `anyship_test` DB 안에 테스트별 임시 스키마를 만들고 종료 시 제거합니다. 로그인·저장소 연결·수정·PR 흐름, SQLite 데이터 이전, 한글·큰 정수·암호화 토큰 보존, 대상 덮어쓰기 방지와 실패 시 전체 롤백을 검증합니다. 별도 테스트 서버는 `ANYSHIP_TEST_DATABASE_URL`로 지정하되 DB 이름이 `_test`로 끝나야 합니다. `service`에서 일반 `pytest tests -q`를 실행하면 격리된 SQLite 테스트를 사용하고 PostgreSQL 전용 이전 테스트는 건너뜁니다.
 
 HTTP 응답 대역을 사용하는 자동 테스트가 실제 GitHub 어댑터의 요청 형식, 기존 파일 보존, 사용자 격리, CSRF, 권한 회수, 검토 해시, 기준 커밋 변경, 중복 PR 방지와 실패 복구를 검증합니다. 자동 테스트는 실제 GitHub를 변경하지 않습니다. 실제 OAuth와 GitHub PR 검증은 위 App 설정 후 직접 진행해야 합니다.
 
 브라우저에서 승인 전후를 외부 변경 없이 검증하려면 `service`에서 `.\.venv\Scripts\python.exe -m tests.browser_fixture --onboarding`을 실행하고 `http://127.0.0.1:8001/_test_only/login`을 엽니다. 테스트 저장소 주소는 `https://github.com/owner/real-repo`입니다. 승인 버튼은 명시적인 테스트 전용 화면을 거쳐 복귀하며 실제 GitHub는 변경하지 않습니다. 이 도우미는 임시 DB와 별도 포트만 사용하고 운영 앱이나 실행 스크립트에 포함되지 않습니다. 실제 서비스의 localhost 로그인 쿠키와 분리하기 위해 테스트 브라우저 주소는 127.0.0.1을 사용합니다.
 
-로컬 실행 가능한 MVP이며 공개 운영 배포 완료 상태는 아닙니다. 운영은 HTTPS·PostgreSQL·실제 App 설정을 요구합니다. 외부 공개 전에는 도메인·호스팅, PostgreSQL 실제 검증, 요청 한도, 탈퇴·보관 정책, 설치 해제 웹훅과 운영 시크릿 관리가 필요합니다. 브라우저에는 HttpOnly/SameSite 세션 쿠키만 저장하고 서버 DB에는 해시된 세션 ID와 암호화된 GitHub 토큰을 저장합니다. 토큰은 최대 8시간 세션 내에서 사용하며 만료 시 재로그인합니다. OAuth 콜백 쿼리 문자열은 로그에 남기지 않아야 합니다.
+로컬 실행 가능한 MVP이며 공개 운영 배포 완료 상태는 아닙니다. 운영은 HTTPS·PostgreSQL·실제 App 설정을 요구합니다. 외부 공개 전에는 도메인·호스팅, 운영 PostgreSQL의 TLS·백업·복구·부하 검증, 요청 한도, 탈퇴·보관 정책, 설치 해제 웹훅과 운영 시크릿 관리가 필요합니다. 브라우저에는 HttpOnly/SameSite 세션 쿠키만 저장하고 서버 DB에는 해시된 세션 ID와 암호화된 GitHub 토큰을 저장합니다. 토큰은 최대 8시간 세션 내에서 사용하며 만료 시 재로그인합니다. OAuth 콜백 쿼리 문자열은 로그에 남기지 않아야 합니다.

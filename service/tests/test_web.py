@@ -16,8 +16,8 @@ ORIGIN = "http://localhost:8000"
 
 
 @pytest.fixture
-def web(tmp_path):
-    app = create_app(Settings(demo=True, database_url=f"sqlite:///{tmp_path / 'test.db'}", demo_workspaces=tmp_path / "demo-workspaces"))
+def web(tmp_path, database_url):
+    app = create_app(Settings(demo=True, database_url=database_url, demo_workspaces=tmp_path / "demo-workspaces"))
     Base.metadata.create_all(app.state.engine)
     with TestClient(app, base_url=ORIGIN) as client:
         yield app, client
@@ -111,9 +111,9 @@ class FakeGitHub(DemoGitHub):
 
 
 @pytest.fixture
-def real_web(tmp_path):
+def real_web(database_url):
     gateway = FakeGitHub()
-    settings = Settings(database_url=f"sqlite:///{tmp_path / 'real.db'}", token_key=Fernet.generate_key().decode(), github_client_id="test", github_client_secret="secret", github_app_slug="test-app")
+    settings = Settings(database_url=database_url, token_key=Fernet.generate_key().decode(), github_client_id="test", github_client_secret="secret", github_app_slug="test-app")
     app = create_app(settings, gateway)
     Base.metadata.create_all(app.state.engine)
     with TestClient(app, base_url=ORIGIN) as client:

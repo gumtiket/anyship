@@ -8,6 +8,7 @@ import sys
 
 from cryptography.fernet import Fernet
 from dotenv import dotenv_values, set_key
+from local_postgres import start as start_postgres, start_if_managed
 
 
 def main():
@@ -46,6 +47,9 @@ def main():
         return 1
     print(f'Configuration ready: {args.mode}; frontend build found.')
     if args.check:
+        if not values.get('APP_DATABASE_URL'):
+            print('Database setup required. Install PostgreSQL binaries, then run without --check.')
+            return 1
         return 0
     try:
         with socket.create_connection(('127.0.0.1', 8000), timeout=1):
@@ -54,6 +58,12 @@ def main():
             return 1
     except OSError:
         pass
+    if not values.get('APP_DATABASE_URL'):
+        url = start_postgres()
+        set_key(config, 'APP_DATABASE_URL', url)
+        env['APP_DATABASE_URL'] = url
+    else:
+        start_if_managed(values['APP_DATABASE_URL'])
     subprocess.run([sys.executable, '-m', 'alembic', 'upgrade', 'head'], cwd=service, env=env, check=True)
     print('Open http://localhost:8000 | Stop: Ctrl+C', flush=True)
     try:

@@ -133,11 +133,11 @@ def login(client):
 
 
 @pytest.fixture
-def real(tmp_path, monkeypatch, request):
+def real(database_url, monkeypatch, request):
     remote = GitHubHTTP()
     with httpx.Client(transport=httpx.MockTransport(remote)) as transport:
         monkeypatch.setattr(httpx, "request", transport.request)
-        settings = Settings(database_url=f"sqlite:///{tmp_path / 'actual.db'}", token_key=Fernet.generate_key().decode(),
+        settings = Settings(database_url=database_url, token_key=Fernet.generate_key().decode(),
                             github_client_id="test", github_client_secret="test", github_app_slug="anyship", ai_mode=getattr(request, "param", "placeholder"))
         app = create_app(settings)
         Base.metadata.create_all(app.state.engine)

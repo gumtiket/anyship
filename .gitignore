@@ -3,3 +3,4 @@ frontend/dist/
 frontend/.env*
 !frontend/.env.example
 .local/
+__pycache__/
