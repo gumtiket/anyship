@@ -5,8 +5,8 @@ from github.repository import parse_repo_url
 
 @pytest.mark.parametrize("suffix", ["", ".git", "/"])
 def test_valid_repo_url(suffix):
-    url = f"https://github.com/gumtiket/team-bronze{suffix}"
-    assert parse_repo_url(url) == "gumtiket/team-bronze"
+    url = f"https://github.com/owner/example{suffix}"
+    assert parse_repo_url(url) == "owner/example"
 
 
 @pytest.mark.parametrize(

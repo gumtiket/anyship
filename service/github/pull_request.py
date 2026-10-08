@@ -26,7 +26,7 @@ def create_pull_request(
     token: str,
     *,
     title: str = "Automated Code Changes",
-    body: str = "Team Bronze MVP가 생성한 자동 코드 변경 사항입니다.",
+    body: str = "코드 수정 도구가 생성한 자동 코드 변경 사항입니다.",
     draft: bool = True,
 ) -> dict:
     response = requests.post(

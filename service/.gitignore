@@ -7,3 +7,6 @@ workspaces/
 build/
 dist/
 *.egg-info/
+.env.web
+.env.github.local
+*.db

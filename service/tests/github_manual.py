@@ -102,8 +102,8 @@ def publish_workspace(
     workspace = repo.inspect(base_branch=base_branch)
     commit_result = repo.commit(
         "chore: apply automated code changes",
-        author_name="Team Bronze Bot",
-        author_email="team-bronze-bot@example.com",
+        author_name="Automation Bot",
+        author_email="automation-bot@example.com",
     )
     repo.push()
 
@@ -119,7 +119,7 @@ def publish_workspace(
         try:
             pull_request = repo.create_pull_request(
                 "Automated Code Changes",
-                body="Team Bronze MVP가 생성한 자동 코드 변경 사항입니다.",
+                body="코드 수정 도구가 생성한 자동 코드 변경 사항입니다.",
                 base=base_branch,
                 draft=True,
             )

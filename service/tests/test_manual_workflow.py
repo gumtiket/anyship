@@ -101,7 +101,7 @@ def test_optional_pr(workspace, remote_operations):
     remote_operations[1].assert_called_once_with(
         "owner/repo", "work", "main", "test-token",
         title="Automated Code Changes",
-        body="Team Bronze MVP가 생성한 자동 코드 변경 사항입니다.",
+        body="코드 수정 도구가 생성한 자동 코드 변경 사항입니다.",
         draft=True,
     )
 

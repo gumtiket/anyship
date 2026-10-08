@@ -26,8 +26,8 @@ def commit_changes(
     repo_path: Path,
     message: str = "chore: apply automated code changes",
     *,
-    author_name: str | None = "Team Bronze Bot",
-    author_email: str | None = "team-bronze-bot@example.com",
+    author_name: str | None = "Automation Bot",
+    author_email: str | None = "automation-bot@example.com",
 ) -> None:
     author_options: list[str] = []
     if author_name is not None:
