@@ -6,10 +6,31 @@ labels: ""
 assignees: ""
 ---
 
+<!--
+이슈 등록 시 오른쪽 Labels에서 작업유형 1개와 작업영역 1개 이상을 선택해주세요.
+
+작업유형:
+- type: feature  — 기능 추가 및 개선
+- type: bug      — 버그 수정
+- type: refactor — 리팩토링
+- type: docs     — 문서 작성 및 수정
+- type: chore    — 환경 설정 및 기타 유지보수
+
+작업영역:
+- area: SERVICE — 서비스
+- area: AI      — AI
+- area: INFRA   — 인프라
+
+예시: 서비스 버그 수정 → type: bug + area: SERVICE
+아래 체크박스를 선택해도 라벨이 자동으로 붙지는 않습니다.
+상태는 별도 라벨 없이 이슈의 Open / Closed로 확인합니다.
+-->
+
 ## 작업 유형
 - [ ] 기능 추가
 - [ ] 버그 수정
 - [ ] 리팩토링
+- [ ] 문서 작성 및 수정
 - [ ] 환경 설정 및 기타
 
 ## 작업 설명
