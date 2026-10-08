@@ -29,6 +29,10 @@ resource "aws_instance" "service_server" {
   vpc_security_group_ids = [aws_security_group.service_server.id]
   iam_instance_profile   = aws_iam_instance_profile.service_server.name
 
+  # Runs once on first boot, so a change must replace the instance.
+  user_data                   = file("${path.module}/scripts/user_data.sh")
+  user_data_replace_on_change = true
+
   # IMDSv2 only, hop limit 1: containers (image builds, verification gate)
   # cannot reach the instance role credentials through the metadata service.
   metadata_options {
