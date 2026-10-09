@@ -53,6 +53,17 @@ variable "ssh_public_key" {
   }
 }
 
+variable "acme_email" {
+  description = "Let's Encrypt 인증서 발급 연락 주소. Traefik 시작에 필수다. 비밀은 아니다."
+  type        = string
+
+  validation {
+    # .env 파일에 그대로 쓰이므로 공백과 따옴표가 들어갈 수 없게 한다.
+    condition     = can(regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$", var.acme_email))
+    error_message = "acme_email은 올바른 이메일 주소여야 한다."
+  }
+}
+
 # --- 기본값이 있는 값(허용 범위를 validation으로 제한) ---
 
 variable "vpc_cidr" {
