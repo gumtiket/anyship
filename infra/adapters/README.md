@@ -94,6 +94,11 @@ else:
 | | `role_arn` | `arn:aws:iam::<12자리>:role/...` (역할만 허용) |
 | | `external_id` | 16~128자. **서비스(백엔드)가 환경마다 만들어 저장** |
 | | `region` | 기본 `ap-northeast-2` |
+| | `host` | (`aws-always-on`) 앱 호스트의 탄력적 IP. 공용 기반의 출력 `host_public_ip` |
+| | `ssh_user`, `ssh_port` | 기본 `deploy`, 22 |
+| | `db_address` | (`aws-always-on`) 공용 RDS 주소. `*.rds.amazonaws.com`만 허용. 출력 `db_address` |
+| | `db_port` | 기본 5432 |
+| | `db_secret_arn` | (`aws-always-on`) RDS 마스터 비밀의 ARN. 출력 `db_master_secret_arn`. 비밀번호 자체가 아니다 |
 | `OnpremEnvironment` | `env_id` | 위와 같음 |
 | | `host` | IP 또는 호스트 이름(SSH 옵션을 끼워 넣을 수 있는 값은 거부) |
 | | `ssh_user` | 기본 `deploy` |
@@ -148,6 +153,28 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
 | `onprem` | `OnpremEnvironment` |
 
 환경과 맞지 않는 세트를 넘기면 `set_not_supported`로 거부합니다.
+
+### `aws-always-on`의 특징 (구현 중)
+
+온프레미스와 같은 부품(`ComposeHost`, `render_stack`, `SshRunner`, `redact`)을 쓰고, 다음이 다릅니다.
+
+| | 온프레미스 | `aws-always-on` |
+|---|---|---|
+| 앱 DB | 앱마다 Postgres **컨테이너**(앱 전용 볼륨) | 사용자 계정의 **공용 RDS** 안에 앱 전용 DB·계정 |
+| `DATABASE_URL` | `compose.yaml`의 치환(`.env`의 비밀번호) | `app.env`에만(권한 600). `sslmode=require` |
+| 앱 네트워크 | `internal`(인터넷 차단) + `traefik` | `traefik`만. 앱이 VPC의 RDS에 닿아야 하므로 앱이 외부로 나갈 수 있다 |
+| 앱 `destroy` | 컨테이너, 볼륨(DB 데이터), 파일 삭제 | 컨테이너와 파일만 삭제. **앱 DB는 남긴다**(데이터 보호, 삭제는 후속) |
+| 호스트 정보 | 환경 등록 때 사용자가 입력 | 공용 기반(`infra/user-account`)의 출력을 서비스가 환경 정보에 담아 넘긴다 |
+| DNS | 선택적 자동화(`dns=`) | 자동화 없음. `*.<환경ID>.aws.<도메인>` 레코드를 미리 만들어 둔 환경 전제 |
+
+- **공용 기반이 없으면** `host`, `db_address`, `db_secret_arn`이 비어 있고, `check`와 `deploy`는 `foundation_missing`으로 실패합니다.
+  기반은 서비스가 `infra/user-account`로 먼저 만듭니다(실행 방법은 그 폴더의 README). 첫 배포 때 약 20분 걸립니다.
+- **마스터 비밀번호**는 서비스 서버가 사용자 역할로 Secrets Manager에서 읽어 SSH 표준입력으로만 호스트에 전달합니다.
+  호스트에는 AWS 자격 증명이 없고, 비밀번호는 명령줄, 로그, 결과, 디스크에 남지 않습니다.
+- **`check`가 서비스의 `STSAdapter.check`와 다른 이유**: 서비스의 것은 환경 등록 때 한 번 하는 신뢰 정책 검증
+  (External ID 필수 여부, 계정 일치)이고, 이쪽은 배포 직전 점검(역할, 호스트, Docker, Traefik)입니다.
+  오류 코드 이름(`access_denied`, `account_mismatch`, `service_credentials_unavailable`, `aws_unavailable`)은 서로 맞췄습니다.
+- 이미지는 온프레미스와 같이 서비스 서버의 로컬 이미지를 SSH로 보냅니다(레지스트리 없음).
 
 ## 오류 코드 (현재)
 
@@ -208,6 +235,8 @@ python -m pytest infra/adapters
 
 ## 남은 것
 
-- 실제 어댑터(온프레미스, AWS): 같은 인터페이스를 구현하는 별도 작업
-- DNS 레코드 생성(`ensure_dns`), 환경별 SSH 키 같은 확장 항목
+- `aws-always-on` 어댑터 본체: `aws_access.py`(AssumeRole, 마스터 비밀번호 읽기)와 `compose.py`의 외부 DB 모드는 있고,
+  앱 DB 생성(`rds_admin.py`)과 어댑터 본체는 구현 중(이슈 #36)
+- 공용 기반을 첫 배포 때 만드는 `ensure_foundation`(Terraform 실행기와 함께), `*.aws` DNS 자동화
+- 환경별 SSH 키, 앱 삭제 때 앱 DB 삭제 같은 확장 항목
 - 오류 코드 추가
