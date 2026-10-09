@@ -98,7 +98,8 @@ else:
 | | `ssh_user`, `ssh_port` | 기본 `deploy`, 22 |
 | | `db_address` | (`aws-always-on`) 공용 RDS 주소. `*.rds.amazonaws.com`만 허용. 출력 `db_address` |
 | | `db_port` | 기본 5432 |
-| | `db_secret_arn` | (`aws-always-on`) RDS 마스터 비밀의 ARN. 출력 `db_master_secret_arn`. 비밀번호 자체가 아니다 |
+| | `db_secret_arn` | (`aws-always-on`) RDS 마스터 비밀의 ARN. 출력 `db_master_secret_arn`. 비밀번호 자체가 아니다. 계정이 `role_arn`의 계정과 같아야 한다 |
+| | `state_bucket` | Terraform state 버킷. 온보딩 스택 출력 `StateBucketName`(이름은 계산할 수 없어 서비스가 저장해 둔다). `anyship-tfstate-<계정>-<리전>-<8자>` 형식만 허용하고 계정이 `role_arn`의 계정과 같아야 한다. `terraform_runner`가 쓴다 |
 | `OnpremEnvironment` | `env_id` | 위와 같음 |
 | | `host` | IP 또는 호스트 이름(SSH 옵션을 끼워 넣을 수 있는 값은 거부) |
 | | `ssh_user` | 기본 `deploy` |
@@ -158,7 +159,7 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
 
 환경과 맞지 않는 세트를 넘기면 `set_not_supported`로 거부합니다.
 
-### `aws-always-on`의 특징 (구현 중)
+### `aws-always-on`의 특징
 
 온프레미스와 같은 부품(`ComposeHost`, `render_stack`, `SshRunner`, `redact`)을 쓰고, 다음이 다릅니다.
 
@@ -183,6 +184,77 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
   (External ID 필수 여부, 계정 일치)이고, 이쪽은 배포 직전 점검(역할, 호스트, Docker, Traefik)입니다.
   오류 코드 이름(`access_denied`, `account_mismatch`, `service_credentials_unavailable`, `aws_unavailable`)은 서로 맞췄습니다.
 - 이미지는 온프레미스와 같이 서비스 서버의 로컬 이미지를 SSH로 보냅니다(레지스트리 없음).
+
+## Terraform 실행기 (`terraform_runner`)
+
+서비스가 사용자 계정에서 Terraform을 실행할 때 쓰는 모듈입니다(첫 대상은 공용 기반 `infra/user-account`).
+`infra/user-account/tf.sh`(사람이 서비스 서버에서 하던 일)를 코드로 옮긴 것입니다.
+
+```python
+from pathlib import Path
+from anyship_adapters import AwsEnvironment
+from anyship_adapters.terraform_runner import TerraformError, TerraformRunner
+
+runner = TerraformRunner(Path("infra/user-account"), plugin_cache_dir=Path("~/.terraform.d/plugin-cache").expanduser())
+env = AwsEnvironment(..., state_bucket="anyship-tfstate-<계정>-<리전>-<8자>")  # 온보딩 스택 출력 StateBucketName
+try:
+    changed = runner.plan(env, variables, log)   # 변경이 있으면 True. 아무것도 바꾸지 않는다
+    runner.apply(env, variables, log)            # terraform apply -auto-approve
+    env = runner.read_foundation(env, log)       # state의 출력으로 host, db_address, db_port, db_secret_arn을 채운 새 환경
+except TerraformError as exc:
+    exc.error  # AdapterError(code, message, hint, retryable)
+    exc.tail   # 비밀을 가린 마지막 출력 15줄. 결과의 details에 넣는 용도
+```
+
+`variables`는 Terraform 변수 이름에서 값으로의 딕셔너리이고, **비밀이 아닌 값만** 넣습니다(임시 JSON 파일로 전달).
+`log`는 어댑터와 같은 `LogEvent` 콜백으로, Terraform 출력 줄이 실시간으로 `step 1/2`(init), `2/2`(명령)로 들어옵니다.
+
+**지키는 것**
+
+- 자격 증명은 AssumeRole한 임시 자격 증명을 **하위 프로세스의 환경변수로만** 줍니다(`AwsAccess.temporary_credentials`). 파일, 명령줄,
+  로그에 남지 않고, 서비스 서버의 `AWS_*` 환경과 인스턴스 메타데이터(`AWS_EC2_METADATA_DISABLED`)는 막습니다.
+- state는 사용자 계정의 버킷에 `<환경ID>/foundation.tfstate`로 둡니다. 백엔드 리전은 버킷 이름에서 꺼냅니다.
+- 실행마다 임시 `TF_DATA_DIR`을 쓰고 끝나면 지웁니다. 모듈 폴더는 `-chdir`로 제자리에서 읽으므로 동시 실행이 섞이지 않고,
+  모듈이 읽는 형제 폴더(`../onprem-vm/scripts` 등)는 그대로 동작합니다(그래서 모듈은 저장소의 `infra/` 트리 안에 있어야 합니다).
+- 같은 state(버킷, 환경 ID, state 이름)에는 한 번에 하나만 실행합니다. 한 프로세스 안에서는 먼저 막고, 여러 프로세스는 S3 잠금이 막습니다.
+- 출력 줄은 비밀을 가려서 전달하고, 중단하거나 제한 시간(기본 45분)이 지나면 `terraform` 프로세스를 종료합니다.
+
+**오류 코드** (`exc.error.code`)
+
+| 코드 | 언제 | 재시도 |
+|---|---|---|
+| `foundation_missing` | `state_bucket`이 없거나, state가 비어 있음(기반이 아직 없음) | 아니요 |
+| `terraform_module_missing` | 모듈 폴더에 `.tf` 파일이 없음 | 아니요 |
+| `invalid_terraform_input` | 변수 이름이나 값 형식이 올바르지 않음 | 아니요 |
+| `terraform_not_found` | 서비스 서버에 `terraform` 실행 파일이 없음 | 아니요 |
+| `access_denied`, `service_credentials_unavailable`, `aws_unavailable` | 역할을 맡지 못함(`AwsAccess`와 같은 코드) | 코드에 따라 |
+| `terraform_init_failed` | `init` 실패 | 아니요 |
+| `terraform_plan_failed`, `terraform_apply_failed`, `terraform_output_failed` | 각 명령 실패 | 예 |
+| `terraform_locked` | 같은 state에 다른 작업이 실행 중 | 예 |
+| `terraform_timeout` | 제한 시간 초과로 종료. 만들어진 것은 다시 실행하면 이어서 진행 | 예 |
+| `terraform_output_invalid` | 출력 JSON을 읽을 수 없음, 항목 누락, 값 검증 실패(틀린 필드 이름만 알리고 값은 싣지 않음) | 아니요 |
+
+**시간** (서비스 서버 실측, 변경 없는 기반, provider 캐시가 데워진 상태)
+
+| 호출 | 시간 |
+|---|---|
+| `plan` | 약 16초 |
+| `read_foundation` | 약 10.5초 |
+
+매 호출마다 AssumeRole과 `init`(백엔드 연결, provider 로드)을 하므로 변경이 없어도 약 10초가 듭니다. provider 캐시가 빈 첫 실행의 시간과
+기반을 처음 만드는 `apply`(RDS 때문에 약 20분)의 시간은 이 실행기로 측정하지 않았습니다.
+
+**시험**
+
+```bash
+python -m pytest infra/adapters    # 가짜 프로세스 기반 단위 테스트 + 진짜 하위 프로세스 1건
+
+# 서비스 서버에서, 이미 만든 기반에 대해(읽기 전용: plan만 실행)
+EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_terraform_runner.py   --role-arn <역할 ARN> --state-bucket <StateBucketName> --var-file <test.tfvars>
+```
+
+`smoke_terraform_runner.py`는 변경 없음, 출력 변환, 중복 실행 거부, 틀린 계정 ID 거부, 비밀과 임시 파일 정리를 확인합니다.
+`apply`는 실제 계정에서 이 실행기로 해 본 적이 없습니다(`plan`과 `output`만).
 
 ## 오류 코드 (현재)
 
@@ -243,9 +315,9 @@ python -m pytest infra/adapters
 
 ## 남은 것
 
-- `aws-always-on` 어댑터 본체: `aws_access.py`(AssumeRole, 마스터 비밀번호 읽기)와 `compose.py`의 외부 DB 모드는 있고,
-  앱 DB 생성(`rds_admin.py`)과 어댑터 본체는 구현 중(이슈 #36)
-- 공용 기반을 첫 배포 때 만드는 `ensure_foundation`(Terraform 실행기와 함께), `*.aws` DNS 자동화
+- 공용 기반을 첫 배포 때 만드는 `ensure_foundation`(`terraform_runner` 위에 얹는 어댑터 메서드), `*.aws` DNS 자동화
+- `terraform_runner`로 `apply`(약 20분)와 실시간 진행 로그를 실제 계정에서 시험(지금은 `plan`과 `output`만 확인)
+- Lambda 세트(`aws-serverless`)
 - 앱의 비밀을 Secrets Manager에 보관(현재는 호스트의 `app.env`). 호스트 교체에도 비밀을 유지하고, 사용자 입력 비밀을
   재배포마다 다시 넘기지 않아도 되게 하려면 필요
 - 환경별 SSH 키, 앱 삭제 때 앱 DB 삭제 같은 확장 항목
