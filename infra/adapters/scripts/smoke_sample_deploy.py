@@ -104,14 +104,21 @@ def main() -> int:
             return 1
 
         print("4) 공개 주소에서 앱 확인")
-        expect("/healthz가 200이다", request("GET", url + "/healthz", args.staging)[0] == 200)
-        status, text = request("GET", url + "/todos", args.staging)
+
+        def probe(method, path, body=None):  # 실패했을 때 이유를 알 수 있게 상태 코드와 본문 앞부분을 보여 준다
+            status, text = request(method, url + path, args.staging, body)
+            print(f"      {method} {path} -> {status} {text[:100]!r}")
+            return status, text
+
+        expect("/healthz가 200이다", probe("GET", "/healthz")[0] == 200)
+        status, text = probe("GET", "/todos")
         titles = [item["title"] for item in json.loads(text)] if status == 200 else []
         expect("DB에서 샘플 할 일 2개를 읽는다(SSL 접속과 시드)", {"샘플 앱 실행 확인", "배포 설정 검토"} <= set(titles))
-        status, _ = request("POST", url + "/todos", args.staging, {"title": "배포 확인용 할 일"})
+        status, _ = probe("POST", "/todos", {"title": "배포 확인용 할 일"})
         expect("새 할 일을 쓸 수 있다(201)", status == 201)
-        status, text = request("GET", url + "/todos", args.staging)
+        status, text = probe("GET", "/todos")
         expect("쓴 할 일이 다시 읽힌다", status == 200 and "배포 확인용 할 일" in text)
+        probe("GET", "/healthz")  # 같은 요청을 한 번 더: 처음에만 실패했는지(일시적인지) 본다
         expect("status가 running이다", adapter.status(env, app).state == "running")
 
         if args.keep:
