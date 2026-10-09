@@ -1,8 +1,10 @@
 """사용자 AWS 계정의 역할을 AssumeRole해서 필요한 값을 읽는다(aws-always-on 어댑터용).
 
-하는 일은 둘뿐이다.
+하는 일은 이렇다.
   * check_role: 역할을 맡을 수 있고, 그 계정이 역할 ARN의 계정과 같은지 확인한다.
   * read_master_password: 공용 RDS의 마스터 비밀번호를 Secrets Manager에서 읽는다.
+  * read_state_bucket: 온보딩 스택의 출력에서 Terraform state 버킷 이름을 읽는다.
+  * temporary_credentials: Terraform 하위 프로세스에 환경변수로만 넘길 임시 자격 증명을 받는다.
 
 임시 자격 증명은 이 모듈 안에서만 쓰고 밖으로 돌려주지 않는다. 비밀번호는 읽은 쪽이 곧바로
 SSH 표준입력으로만 쓰고, 로그와 결과에 남기지 않는다(호출하는 쪽이 redact에 등록한다).
@@ -13,6 +15,7 @@ External ID가 없을 때 거부되는지 같은 신뢰 정책 검증은 환경 
 boto3는 선택 의존성이라 처음 쓸 때 불러온다.
 """
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -34,6 +37,15 @@ def _fail(code: str, message: str, hint: str | None = None, retryable: bool = Fa
 
 def _account_of(arn: str) -> str:
     return arn.split(":")[4]
+
+
+_STACK = re.compile(r"^[A-Za-z][-A-Za-z0-9]{0,127}$")  # CloudFormation 스택 이름 규칙
+_STACK_READY = ("CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE")
+
+
+def _stack_not_found() -> AwsAccessError:
+    return _fail("stack_not_found", "온보딩 스택을 찾을 수 없습니다.",
+                 hint="스택 이름을 바꾸지 않았는지, 올바른 리전인지 확인해 주세요.")
 
 
 def _aws_error(exc: Exception) -> AwsAccessError:
@@ -122,6 +134,37 @@ class AwsAccess:
         if account != _account_of(env.role_arn):
             raise _fail("account_mismatch", "검증한 AWS 계정과 역할 ARN의 계정이 일치하지 않습니다.")
         return account
+
+    def read_state_bucket(self, env: AwsEnvironment, stack_name: str) -> str:
+        """온보딩 스택의 출력 `StateBucketName`을 읽는다(이름은 스택 ID로 정해져 계산할 수 없다).
+
+        서비스가 환경을 처음 배포하기 전에 한 번 읽어 저장한다. 스택 이름은 서비스가 만든 값이지만 사용자가 콘솔에서
+        바꿀 수 있으므로 스택이 없는 경우를 따로 알린다. 읽은 값은 모델의 `state_bucket` 규칙(형식, 같은 계정)을
+        통과해야 한다."""
+        if not _STACK.match(stack_name):
+            raise _fail("invalid_stack_name", "온보딩 스택 이름이 올바르지 않습니다.")
+        session = self._assume(env)
+        try:
+            stacks = session.client("cloudformation", region_name=env.region).describe_stacks(
+                StackName=stack_name)["Stacks"]
+        except Exception as exc:
+            if getattr(exc, "response", {}).get("Error", {}).get("Code") == "ValidationError":  # 없는 스택
+                raise _stack_not_found() from None
+            raise _aws_error(exc) from None
+        if not stacks:
+            raise _stack_not_found()
+        stack = stacks[0]
+        if stack.get("StackStatus") not in _STACK_READY:
+            raise _fail("stack_not_ready", "온보딩 스택이 아직 완료되지 않았거나 실패한 상태입니다.",
+                        hint="AWS 콘솔에서 스택이 CREATE_COMPLETE인지 확인해 주세요.", retryable=True)
+        bucket = next((o.get("OutputValue") for o in stack.get("Outputs", []) if o.get("OutputKey") == "StateBucketName"), None)
+        try:
+            if not isinstance(bucket, str):
+                raise ValueError
+            return AwsEnvironment.model_validate({**env.model_dump(), "state_bucket": bucket}).state_bucket
+        except ValueError:  # pydantic의 ValidationError도 ValueError다. 읽은 값은 오류에 싣지 않는다.
+            raise _fail("stack_output_invalid", "온보딩 스택의 StateBucketName 출력을 읽지 못했습니다.",
+                        hint="스택이 서비스의 최신 템플릿으로 만들어졌는지 확인해 주세요.") from None
 
     def read_master_password(self, env: AwsEnvironment) -> str:
         """공용 RDS의 마스터 비밀번호. env.db_secret_arn이 같은 계정의 비밀이어야 한다."""

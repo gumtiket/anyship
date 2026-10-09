@@ -248,3 +248,121 @@ def test_a_response_without_the_expected_fields_is_reported_without_echoing_it()
         access.temporary_credentials(env())
     assert caught.value.error.code == "aws_unavailable" and caught.value.error.retryable
     assert CREDS["AccessKeyId"] not in caught.value.error.model_dump_json()
+
+
+# --- read_state_bucket (온보딩 스택 출력) --------------------------------------------------------
+STACK = "anyship-onboarding-0123456789abcdef0123456789abcdef"
+BUCKET = f"anyship-tfstate-{ACCOUNT}-ap-northeast-2-2b9b6060"
+
+
+def stack(status="CREATE_COMPLETE", outputs=None):
+    outputs = [{"OutputKey": "RoleArn", "OutputValue": env().role_arn},
+               {"OutputKey": "StateBucketName", "OutputValue": BUCKET}] if outputs is None else outputs
+    found = {"StackName": STACK, "CreationTime": datetime(2026, 10, 10, tzinfo=timezone.utc), "StackStatus": status}
+    return {"Stacks": [{**found, "Outputs": outputs}]}
+
+
+def stack_stubs(response=None, *, error=None):
+    sts, sts_stub = stubbed("sts")
+    formation, formation_stub = stubbed("cloudformation")
+    assume_ok(sts_stub)
+    if error:
+        formation_stub.add_client_error("describe_stacks", **error)
+    else:
+        formation_stub.add_response("describe_stacks", response or stack(), {"StackName": STACK})
+    access, created = make({"sts": sts}, {"cloudformation": formation})
+    return access, created, sts_stub, formation_stub
+
+
+def test_the_state_bucket_is_read_from_the_stack_output_with_the_assumed_role():
+    access, created, sts_stub, formation_stub = stack_stubs()
+    with sts_stub, formation_stub:
+        assert access.read_state_bucket(env(), STACK) == BUCKET
+    assert created[1]["aws_session_token"] == CREDS["SessionToken"]
+
+
+@pytest.mark.parametrize("status", ["CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE"])
+def test_a_finished_stack_is_accepted(status):
+    access, _, sts_stub, formation_stub = stack_stubs(stack(status))
+    with sts_stub, formation_stub:
+        assert access.read_state_bucket(env(), STACK) == BUCKET
+
+
+@pytest.mark.parametrize("status", ["CREATE_IN_PROGRESS", "ROLLBACK_COMPLETE", "ROLLBACK_IN_PROGRESS", "CREATE_FAILED",
+                                    "DELETE_IN_PROGRESS", "UPDATE_IN_PROGRESS"])
+def test_a_stack_that_is_unfinished_or_failed_is_not_trusted(status):
+    access, _, sts_stub, formation_stub = stack_stubs(stack(status))
+    with sts_stub, formation_stub, pytest.raises(AwsAccessError) as caught:
+        access.read_state_bucket(env(), STACK)
+    assert caught.value.error.code == "stack_not_ready" and caught.value.error.retryable
+
+
+@pytest.mark.parametrize("name", ["", "1abc", "a b", "x;rm -rf", "anyship/onboarding", "a" * 129])
+def test_an_invalid_stack_name_is_rejected_before_any_aws_call(name):
+    calls = []
+    access = AwsAccess(lambda **kwargs: calls.append(kwargs))
+    with pytest.raises(AwsAccessError) as caught:
+        access.read_state_bucket(env(), name)
+    assert caught.value.error.code == "invalid_stack_name" and calls == []
+
+
+def test_a_missing_stack_is_reported_as_such_without_echoing_its_name():
+    access, _, sts_stub, formation_stub = stack_stubs(error=dict(
+        service_error_code="ValidationError", http_status_code=400, service_message=f"Stack with id {STACK} does not exist"))
+    with sts_stub, formation_stub, pytest.raises(AwsAccessError) as caught:
+        access.read_state_bucket(env(), STACK)
+    assert caught.value.error.code == "stack_not_found" and not caught.value.error.retryable
+    assert STACK not in caught.value.error.model_dump_json()
+
+
+def test_an_empty_stack_list_is_a_missing_stack():
+    access, _, sts_stub, formation_stub = stack_stubs({"Stacks": []})
+    with sts_stub, formation_stub, pytest.raises(AwsAccessError) as caught:
+        access.read_state_bucket(env(), STACK)
+    assert caught.value.error.code == "stack_not_found"
+
+
+@pytest.mark.parametrize("aws_code, status, code, retryable", [
+    ("AccessDenied", 403, "access_denied", False),
+    ("Throttling", 400, "aws_unavailable", True),
+])
+def test_other_describe_errors_use_the_same_codes(aws_code, status, code, retryable):
+    access, _, sts_stub, formation_stub = stack_stubs(error=dict(
+        service_error_code=aws_code, http_status_code=status, service_message=f"{STACK} {EXTERNAL_ID}"))
+    with sts_stub, formation_stub, pytest.raises(AwsAccessError) as caught:
+        access.read_state_bucket(env(), STACK)
+    error = caught.value.error
+    assert (error.code, error.retryable) == (code, retryable)
+    assert STACK not in error.model_dump_json() and EXTERNAL_ID not in error.model_dump_json()
+
+
+@pytest.mark.parametrize("outputs", [
+    [],  # 출력이 없다
+    [{"OutputKey": "RoleArn", "OutputValue": "arn:aws:iam::223455088214:role/x"}],  # 필요한 키가 없다
+    [{"OutputKey": "StateBucketName", "OutputValue": "my-own-bucket"}],  # 우리가 짓는 모양이 아니다
+    [{"OutputKey": "StateBucketName", "OutputValue": "anyship-tfstate-111111111111-ap-northeast-2-2b9b6060"}],  # 다른 계정
+    [{"OutputKey": "StateBucketName", "OutputValue": f"{BUCKET}; rm -rf /"}],
+    [{"OutputKey": "StateBucketName"}],  # 값이 없다
+])
+def test_a_bucket_output_that_is_missing_or_not_ours_is_rejected_without_echoing_it(outputs):
+    access, _, sts_stub, formation_stub = stack_stubs(stack(outputs=outputs))
+    with sts_stub, formation_stub, pytest.raises(AwsAccessError) as caught:
+        access.read_state_bucket(env(), STACK)
+    error = caught.value.error
+    assert error.code == "stack_output_invalid"
+    assert "my-own-bucket" not in error.model_dump_json() and "111111111111" not in error.model_dump_json()
+
+
+def test_the_stack_is_read_in_the_environment_region(monkeypatch):
+    requested = []
+    original = FakeSession.client
+
+    def record(self, name, **kwargs):
+        requested.append((name, kwargs))
+        return original(self, name, **kwargs)
+
+    monkeypatch.setattr(FakeSession, "client", record)
+    access, _, sts_stub, formation_stub = stack_stubs()
+    with sts_stub, formation_stub:
+        access.read_state_bucket(env(region="us-east-1"), STACK)
+    assert ("cloudformation", {"region_name": "us-east-1"}) in requested
