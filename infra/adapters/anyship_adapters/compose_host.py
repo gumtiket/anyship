@@ -19,6 +19,7 @@ APPS_DIR = "/opt/apps"
 _APP = re.compile(APP_NAME_PATTERN)
 _IMAGE = re.compile(r"^[a-z][a-z0-9-]{2,62}:[0-9a-f]{7,40}$")  # <앱>:<커밋 SHA>
 _ENV_LINE = re.compile(r"^([A-Z_][A-Z0-9_]{0,63})='([^'\r\n\0]*)'$")
+_TAG = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 class ComposeHost:
@@ -82,6 +83,50 @@ class ComposeHost:
         """앱 컨테이너 안에서만 마이그레이션 명령을 실행한다(서버의 셸에서 실행하지 않는다)."""
         return self._ssh.run(["docker", "compose", "--project-directory", self._app_dir(app),
                               "run", "--rm", "web", "sh", "-c", command], timeout=timeout)
+
+    # -- 이미 배포된 앱을 살펴보고 바꾸고 지우는 도구 ------------------------------------------
+    def exists(self, app: str) -> bool:
+        return self._ssh.run(["test", "-f", f"{self._app_dir(app)}/compose.yaml"]).ok
+
+    def _image_line(self, app: str) -> re.Pattern:
+        # render_stack이 쓴 웹 앱의 이미지 줄: `    image: "<앱>:<커밋 SHA>"`
+        return re.compile(rf'^    image: "{re.escape(app)}:([0-9a-f]{{7,40}})"$', re.MULTILINE)
+
+    def current_image_tag(self, app: str) -> str | None:
+        done = self._ssh.run(["cat", f"{self._app_dir(app)}/compose.yaml"])
+        found = self._image_line(app).search(done.stdout) if done.ok else None
+        return found.group(1) if found else None
+
+    def set_image_tag(self, app: str, image_tag: str) -> CommandResult:
+        """서버의 compose.yaml에서 앱 이미지 태그만 바꾼다(비밀과 DB 설정은 그대로 둔다)."""
+        if not _TAG.match(image_tag):
+            raise ValueError("invalid image tag")
+        path = f"{self._app_dir(app)}/compose.yaml"
+        done = self._ssh.run(["cat", path])
+        if not done.ok:
+            return done
+        updated, count = self._image_line(app).subn(f'    image: "{app}:{image_tag}"', done.stdout)
+        if count != 1:
+            return CommandResult(1, stderr="compose.yaml에서 앱 이미지 줄을 찾지 못했습니다")
+        return self._ssh.put(path, updated, mode="0644")
+
+    def running_services(self, app: str) -> set[str]:
+        done = self._ssh.run(["docker", "compose", "--project-directory", self._app_dir(app),
+                              "ps", "--status", "running", "--services"])
+        return set(done.stdout.split()) if done.ok else set()
+
+    def image_present(self, image: str) -> bool:
+        if not _IMAGE.match(image):
+            raise ValueError("invalid image reference")
+        return self._ssh.run(["docker", "image", "inspect", "--format", "{{.Id}}", image]).ok
+
+    def down(self, app: str, *, timeout: float = 120) -> CommandResult:
+        """컨테이너, 네트워크, DB 볼륨(데이터)을 모두 지운다."""
+        return self._ssh.run(["docker", "compose", "--project-directory", self._app_dir(app),
+                              "down", "--volumes", "--remove-orphans"], timeout=timeout)
+
+    def remove_dir(self, app: str) -> CommandResult:
+        return self._ssh.run(["rm", "-r", "-f", self._app_dir(app)])
 
 
 def _status(url: str, verify_tls: bool, timeout: float = 5) -> int | None:

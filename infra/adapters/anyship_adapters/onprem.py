@@ -3,21 +3,27 @@
 공용 부품을 조립한다: spec(검증), compose(파일), ssh와 compose_host(서버 조작), redact(비밀).
 이 환경에만 해당하는 것은 앱 주소 규칙(`<앱>.<환경ID>.onprem.<도메인>`)과 앱 전용 DB 컨테이너다.
 
-이 조각의 범위는 check와 deploy다. status, rollback, destroy와 DNS 레코드 자동 생성은
-다음 조각에서 추가한다(그 전까지 Adapter 인터페이스를 전부 만족하지는 않는다).
+Adapter 인터페이스의 다섯 함수를 모두 구현한다. DNS 레코드 자동 생성과 Traefik 설치는
+아직 없다(데모 환경의 레코드와 Traefik은 미리 만들어 둔 것을 쓴다).
 """
 import ipaddress
+import re
 from pathlib import Path
 from typing import Callable
 
 from .base import LogFn
 from .compose import render_stack
 from .compose_host import ComposeHost, wait_healthy
-from .models import AdapterError, CheckResult, DeployResult, LogEvent, OnpremEnvironment, Secrets, Spec
+from .models import (APP_NAME_PATTERN, IMAGE_TAG_PATTERN, AdapterError, CheckResult, DeployResult, DestroyResult,
+                     LogEvent, OnpremEnvironment, Secrets, Spec, StatusResult)
 from .redact import make_safe_log, redact_text
 from .sets import ONPREM, SetName
 from .spec import SpecError, parse_spec
 from .ssh import CommandResult, SshConnection, SshRunner
+
+_APP = re.compile(APP_NAME_PATTERN)
+_TAG = re.compile(IMAGE_TAG_PATTERN)
+HEALTH_PATH = "/healthz"  # 명세의 healthcheck는 현재 /healthz만 허용된다. status와 rollback은 명세가 없어서 이 값을 쓴다.
 
 
 def _err(code: str, message: str, hint: str | None = None, retryable: bool = False) -> AdapterError:
@@ -152,6 +158,95 @@ class OnpremAdapter:
                              retryable=True))
         return DeployResult(ok=True, url=f"https://{address}", image_tag=image_tag,
                             details={"warnings": list(stack.warnings), "generated": list(stack.generated)})
+
+
+    # -- 배포한 앱을 살펴보고, 되돌리고, 지운다 ----------------------------------------------------
+    def _address(self, env: OnpremEnvironment, app: str) -> str:
+        return f"{app}.{env.env_id}.onprem.{self._domain}"
+
+    def status(self, env: OnpremEnvironment, app: str) -> StatusResult:
+        if not _APP.match(app):
+            return StatusResult(ok=False, error=_bad_app())
+        ssh, host = self._connect(env)
+        reached = ssh.run(["true"])
+        if not reached.ok:
+            return StatusResult(ok=False, error=_ssh_error(reached))
+        if not host.exists(app):
+            return StatusResult(ok=True, state="not_deployed")
+        url, tag = f"https://{self._address(env, app)}", host.current_image_tag(app)
+        if "web" not in host.running_services(app):
+            return StatusResult(ok=True, state="stopped", url=url, image_tag=tag)
+        healthy, _ = self._healthy(url + HEALTH_PATH, attempts=1, verify_tls=self._verify_tls)
+        return StatusResult(ok=True, state="running" if healthy else "unhealthy", url=url, image_tag=tag)
+
+    def rollback(self, env: OnpremEnvironment, app: str, image_tag: str, log: LogFn) -> DeployResult:
+        """서버에 남아 있는 이전 이미지로 다시 실행한다. DB 스키마는 되돌리지 않는다."""
+        if not _APP.match(app):
+            return DeployResult(ok=False, error=_bad_app())
+        if not _TAG.match(image_tag):
+            return DeployResult(ok=False, error=_err("invalid_image_tag", "이미지 태그 형식이 올바르지 않습니다.",
+                                                     hint="커밋 SHA(16진수 7~40자)를 사용해 주세요."))
+        ssh, host = self._connect(env)
+        total = 4
+
+        def fail(error: AdapterError, result: CommandResult | None = None) -> DeployResult:
+            log(LogEvent(level="error", message=error.message))
+            details = {"stderr": redact_text(result.stderr[-500:])} if result and result.stderr else {}
+            return DeployResult(ok=False, error=error, image_tag=image_tag, details=details)
+
+        _step(log, 1, total, "롤백 준비", f"이미지 {app}:{image_tag}가 서버에 있는지 확인하는 중")
+        reached = ssh.run(["true"])
+        if not reached.ok:
+            return fail(_ssh_error(reached), reached)
+        if not host.exists(app):
+            return fail(_err("app_not_found", "배포된 앱을 찾을 수 없어 되돌릴 수 없습니다.",
+                             hint="먼저 이 환경에 앱을 배포해 주세요."))
+        if not host.image_present(f"{app}:{image_tag}"):
+            return fail(_err("image_not_found", "서버에 이 버전의 이미지가 남아 있지 않습니다.",
+                             hint="이미지를 레지스트리에 보관하지 않아서, 서버에 없는 버전은 다시 배포해야 합니다."))
+        _step(log, 2, total, "설정 갱신", "이미지 태그만 바꾸고 나머지 설정은 그대로 둔다")
+        updated = host.set_image_tag(app, image_tag)
+        if not updated.ok:
+            return fail(_err("server_write_failed", "서버의 설정 파일을 바꾸지 못했습니다."), updated)
+        _step(log, 3, total, "앱 시작", "이전 버전으로 다시 시작하는 중")
+        started = host.up(app)
+        if not started.ok:
+            return fail(_err("container_start_failed", "이전 버전의 컨테이너를 시작하지 못했습니다.",
+                             retryable=True), started)
+        _step(log, 4, total, "헬스체크", "공개 주소로 앱이 응답하는지 확인하는 중")
+        url = f"https://{self._address(env, app)}"
+        healthy, status = self._healthy(url + HEALTH_PATH, verify_tls=self._verify_tls)
+        if not healthy:
+            return fail(_err("healthcheck_failed", f"되돌렸지만 헬스체크를 통과하지 못했습니다(마지막 응답: {status}).",
+                             retryable=True))
+        return DeployResult(ok=True, url=url, image_tag=image_tag)
+
+    def destroy(self, env: OnpremEnvironment, app: str, log: LogFn) -> DestroyResult:
+        """앱의 컨테이너, DB 데이터, 서버의 앱 디렉터리를 지운다. 이미 없어도 성공이다."""
+        if not _APP.match(app):
+            return DestroyResult(ok=False, error=_bad_app())
+        ssh, host = self._connect(env)
+        _step(log, 1, 2, "컨테이너와 데이터 제거", "컨테이너와 DB 볼륨을 지우는 중")
+        reached = ssh.run(["true"])
+        if not reached.ok:
+            return DestroyResult(ok=False, error=_ssh_error(reached))
+        if host.exists(app):
+            downed = host.down(app)
+            if not downed.ok:
+                return DestroyResult(ok=False, error=_err(
+                    "destroy_failed", "컨테이너를 지우지 못했습니다.",
+                    hint="서버에서 docker compose down을 직접 확인해 주세요."),
+                    details={"stderr": redact_text(downed.stderr[-500:])})
+        _step(log, 2, 2, "파일 제거", "서버의 앱 디렉터리를 지우는 중")
+        removed = host.remove_dir(app)
+        if not removed.ok:
+            return DestroyResult(ok=False, error=_err("destroy_failed", "앱 디렉터리를 지우지 못했습니다."))
+        return DestroyResult(ok=True)
+
+
+def _bad_app() -> AdapterError:
+    return _err("invalid_spec", "앱 이름 형식이 올바르지 않습니다.",
+                hint="앱 이름은 소문자로 시작하는 3~63자의 소문자, 숫자, 하이픈이어야 합니다.")
 
 
 def _is_public_ipv4(text: str) -> bool:
