@@ -35,6 +35,7 @@ class ContainerRunner(Protocol):
         self, *, image: str, name: str, network: str, env: Mapping[str, str], command: list[str]
     ) -> None: ...
     def wait(self, name: str, timeout: int = 30) -> CommandResult: ...
+    def exec(self, name: str, command: list[str], timeout: int = 30) -> CommandResult: ...
     def logs(self, name: str) -> str: ...
     def remove(self, name: str) -> None: ...
     def image_remove(self, tag: str) -> None: ...
@@ -143,6 +144,13 @@ class DockerCliRunner:
             raise RunnerError("gate_wait_output_invalid") from None
         return CommandResult(code=code, output=self.logs(name))
 
+    def exec(self, name: str, command: list[str], timeout: int = 30) -> CommandResult:
+        if name not in self.containers or not name.endswith("-app"):
+            raise ValueError("gate_unowned_app_container")
+        if command != ["python", "-m", "app.migrate"]:
+            raise ValueError("gate_exec_command_not_allowed")
+        return self._call(["exec", "--user", "10001:10001", name, *command], timeout=timeout)
+
     def logs(self, name: str) -> str:
         if name not in self.containers:
             raise ValueError("gate_unowned_container")
@@ -174,6 +182,7 @@ class FakeRunner:
         self.fail_at = fail_at
         self.events: list[tuple[str, str]] = []
         self.commands: list[list[str]] = []
+        self.exec_commands: list[tuple[str, list[str]]] = []
         self.networks: set[str] = set()
         self.containers: dict[str, tuple[str, list[str]]] = {}
         self.envs: dict[str, dict[str, str]] = {}
@@ -225,6 +234,15 @@ class FakeRunner:
         return CommandResult(
             code=int(failure), output="fake failure" if failure else self.logs(name)
         )
+
+    def exec(self, name: str, command: list[str], timeout: int = 30) -> CommandResult:
+        if name not in self.containers or not name.endswith("-app"):
+            raise ValueError("gate_unowned_app_container")
+        if command != ["python", "-m", "app.migrate"]:
+            raise ValueError("gate_exec_command_not_allowed")
+        self.events.append(("exec", name))
+        self.exec_commands.append((name, list(command)))
+        return CommandResult(code=int(self.fail_at == "migrate"), output="fake migrate")
 
     def logs(self, name: str) -> str:
         image, command = self.containers[name]

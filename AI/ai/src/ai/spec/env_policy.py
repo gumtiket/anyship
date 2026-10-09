@@ -5,6 +5,7 @@ import re
 ENV_NAME = r"^[A-Z][A-Z0-9_]+$"
 APP_NAME = r"^[a-z][a-z0-9-]{1,29}[a-z0-9]$"
 MAX_ENV_BYTES = 4096
+MAX_ENV_VALUE_CHARS = 1024
 # PORT comes from spec.port. Platform/process controls must not come from app settings.
 DENIED_NAMES = frozenset(
     {
@@ -29,7 +30,7 @@ DENIED_NAMES = frozenset(
         "LAMBDA_RUNTIME_API",
     }
 )
-DENIED_PREFIXES = ("AWS_", "DOCKER_", "LAMBDA_")
+DENIED_PREFIXES = ("AWS_", "DOCKER_", "LAMBDA_", "COMPOSE_", "TRAEFIK_", "LD_", "POSTGRES")
 EXTERNAL_URLS = frozenset({"DATABASE_URL", "REDIS_URL", "STORAGE_URL"})
 
 
@@ -37,8 +38,13 @@ def allowed_name(name: str) -> bool:
     return (
         bool(re.fullmatch(ENV_NAME, name))
         and name not in DENIED_NAMES
+        and name not in EXTERNAL_URLS
         and not name.startswith(DENIED_PREFIXES)
     )
+
+
+def allowed_value(value: str) -> bool:
+    return len(value) <= MAX_ENV_VALUE_CHARS and not any(c in value for c in "\r\n\x00'")
 
 
 def known_env_bytes(values: dict[str, str]) -> int:

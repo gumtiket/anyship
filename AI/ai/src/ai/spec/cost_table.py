@@ -22,7 +22,7 @@ class CostAssumptions(BaseModel):
 
 @dataclass(frozen=True)
 class Rate:
-    value: float
+    value: float | None
     unit: str
     label: str = "단가 미확인"
 
@@ -36,8 +36,11 @@ RATES = {
         "storage": Rate(0.15, "USD / GB-month"),
     },
     "aws-always-on": {
-        "host": Rate(0.035, "USD / 서버 시간"),
-        "storage": Rate(0.15, "USD / GB-month"),
+        "host": Rate(None, "USD / t3.small 호스트 시간"),
+        "database": Rate(None, "USD / RDS db.t4g.micro 시간"),
+        "database_storage": Rate(None, "USD / RDS GB-month"),
+        "root_volume": Rate(None, "USD / 루트 볼륨 GB-month"),
+        "elastic_ip": Rate(None, "USD / 탄력적 IP 시간"),
     },
     "onprem": {"host": Rate(0.015, "USD / 기존 서버 전력·운영 시간")},
 }
@@ -45,7 +48,7 @@ RATES = {
 
 def estimate_monthly(
     selected: str, *, memory_mb: int, assumptions: CostAssumptions | None = None
-) -> tuple[float, list[str]]:
+) -> tuple[float | None, list[str]]:
     usage = assumptions or CostAssumptions()
     if not usage.free_tier_excluded:
         raise ValueError("free_tier_calculation_not_supported")
@@ -61,6 +64,8 @@ def estimate_monthly(
             + usage.running_hours * rates["database"].value
             + usage.storage_gb * rates["storage"].value
         )
+    elif selected == "aws-always-on":
+        amount = None
     else:
         amount = usage.running_hours * rates["host"].value
         if "storage" in rates:
@@ -77,9 +82,16 @@ def estimate_monthly(
         f"요청당 평균 실행 시간 가정: {usage.average_request_seconds:g}초 (실측/최대 시간 아님)",
         f"저장 용량 가정: {usage.storage_gb:g}GB, 메모리 입력: {memory_mb}MB",
         "데이터 전송·NAT·백업·로그·세금·환율·DB 고가용성·하드웨어 구입비는 계산하지 않음",
-        "서버리스는 소형 단일 DB 가정; 상시 컨테이너는 DB도 동일 서버에서 실행하는 가정",
+        (
+            "환경 공용 기반: 호스트 t3.small + RDS db.t4g.micro 20GB + "
+            "루트 볼륨 30GB + 탄력적 IP; 여러 앱이 공유. "
+            "앱별 비용이 아님. 단가 미확정으로 총액 산정 보류."
+        )
+        if selected == "aws-always-on"
+        else "서버리스는 소형 단일 DB 가정; 온프레미스는 기존 서버 운영 가정",
     ]
     notes.extend(
-        f"{name}: {rate.value:g} {rate.unit} — {rate.label}" for name, rate in rates.items()
+        f"{name}: {rate.value if rate.value is not None else '미확정'} {rate.unit} — {rate.label}"
+        for name, rate in rates.items()
     )
-    return round(amount, 4), notes
+    return round(amount, 4) if amount is not None else None, notes

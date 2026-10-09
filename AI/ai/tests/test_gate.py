@@ -132,8 +132,8 @@ def test_fake_gate_sequence_flags_and_cleanup(tmp_path, monkeypatch):
         "network",
         "postgres",
         "postgres_ready",
-        "migrate",
         "app_start",
+        "migrate",
         "healthcheck",
         "postgres_crud",
     ]
