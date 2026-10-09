@@ -79,12 +79,12 @@ def test_check_failures_have_a_specific_code(overrides, code):
 
 
 # --- deploy: 성공 -----------------------------------------------------------------------------
-def test_deploy_returns_the_public_url_after_six_numbered_steps():
+def test_deploy_returns_the_public_url_after_seven_numbered_steps():
     log = Log()
     result = deploy(server(), log=log)
     assert result.ok and result.url == "https://todo.demo.onprem.anyship.cloud" and result.image_tag == TAG
-    assert log.steps() == [(1, 6, "환경 점검"), (2, 6, "이미지 전달"), (3, 6, "파일 쓰기"),
-                           (4, 6, "앱 시작"), (5, 6, "마이그레이션"), (6, 6, "헬스체크")]
+    assert log.steps() == [(1, 7, "환경 점검"), (2, 7, "DNS 준비"), (3, 7, "이미지 전달"), (4, 7, "파일 쓰기"),
+                           (5, 7, "앱 시작"), (6, 7, "마이그레이션"), (7, 7, "헬스체크")]
 
 
 def test_deploy_does_things_in_a_safe_order():
@@ -103,7 +103,7 @@ def test_deploy_without_a_release_step_skips_the_migration_but_keeps_the_numberi
     log = Log()
     srv = server()
     result = deploy(srv, make(release=None), log=log)
-    assert result.ok and (5, 6, "마이그레이션") in log.steps()
+    assert result.ok and (6, 7, "마이그레이션") in log.steps()
     assert not any(tuple(c[:5]) == RUN for c in srv.commands)
 
 
@@ -140,10 +140,10 @@ def test_warnings_are_logged_and_returned():
 # --- deploy: 실패 -----------------------------------------------------------------------------
 @pytest.mark.parametrize("overrides, kw, code, last_step", [
     ({"true": (255, b"", b"")}, {}, "ssh_unreachable", 1),
-    ({"docker load": (1, b"", b"no space")}, {}, "image_transfer_failed", 2),
-    ({" ".join(UP): (1, b"", b"port in use")}, {}, "container_start_failed", 4),
-    ({" ".join(RUN): (1, b"", b"relation missing")}, {}, "migration_failed", 5),
-    ({}, {"healthy": lambda url, verify_tls: (False, 502)}, "healthcheck_failed", 6),
+    ({"docker load": (1, b"", b"no space")}, {}, "image_transfer_failed", 3),
+    ({" ".join(UP): (1, b"", b"port in use")}, {}, "container_start_failed", 5),
+    ({" ".join(RUN): (1, b"", b"relation missing")}, {}, "migration_failed", 6),
+    ({}, {"healthy": lambda url, verify_tls: (False, 502)}, "healthcheck_failed", 7),
 ])
 def test_each_failure_has_its_own_code_and_stops_the_deploy(overrides, kw, code, last_step):
     srv, log = server(**overrides), Log()
