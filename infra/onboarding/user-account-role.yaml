@@ -43,15 +43,22 @@ Resources:
         - arn:aws:iam::aws:policy/AdministratorAccess
 
   # 공용 기반 Terraform의 state를 보관하는 버킷. state에는 리소스 ID와 네트워크 구성이 들어
-  # 있어 민감하므로, 서비스 계정이 아니라 사용자 계정에 둔다. 이름은 계정 ID와 리전에서 정해져서
-  # 서비스가 따로 저장하지 않아도 된다(anyship-tfstate-<계정ID>-<리전>, 최대 43자).
+  # 있어 민감하므로, 서비스 계정이 아니라 사용자 계정에 둔다.
   # 스택을 지워도 버킷은 남는다(비어 있지 않으면 삭제가 실패하므로 Retain). 정리 방법은 README 참고.
+  # 남은 버킷과 이름이 충돌하지 않도록 스택 ID의 앞 8자리를 이름에 붙인다
+  # (anyship-tfstate-<계정ID>-<리전>-<8자>, 최대 52자). 서비스는 이름을 계산하지 않고
+  # 스택 출력 StateBucketName에서 읽는다.
   StateBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub anyship-tfstate-${AWS::AccountId}-${AWS::Region}
+      BucketName: !Join
+        - "-"
+        - - anyship-tfstate
+          - !Ref AWS::AccountId
+          - !Ref AWS::Region
+          - !Select [0, !Split ["-", !Select [2, !Split ["/", !Ref AWS::StackId]]]]
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
@@ -94,5 +101,5 @@ Outputs:
   AccountId:
     Value: !Ref AWS::AccountId
   StateBucketName:
-    Description: Terraform state bucket (derived from account ID and region).
+    Description: Terraform state bucket. The service reads this output; the name is not derivable.
     Value: !Ref StateBucket
