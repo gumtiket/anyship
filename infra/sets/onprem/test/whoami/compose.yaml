@@ -1,0 +1,31 @@
+# Stand-in for a deployed app: traefik/whoami echoes request details, which is
+# enough to prove DNS -> Traefik -> container -> HTTPS works. A real app uses
+# the same shape; only the image, port and Host rule change.
+#
+#   APP_HOST  (required) full host name, e.g. whoami.demo.onprem.anyship.cloud
+services:
+  whoami:
+    image: traefik/whoami:v1.12.0
+    restart: unless-stopped
+    command: ["--port", "8080"]
+    user: "65532:65532"
+    networks:
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.whoami.rule=Host(`${APP_HOST:?set APP_HOST}`)
+      - traefik.http.routers.whoami.entrypoints=websecure
+      - traefik.http.routers.whoami.tls.certresolver=le
+      - traefik.http.services.whoami.loadbalancer.server.port=8080
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 50
+
+networks:
+  traefik:
+    external: true
