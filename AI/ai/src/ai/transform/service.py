@@ -14,6 +14,7 @@ from ai.detectors.repo import aliases, qualified
 from ai.llm.base import LLMClient
 from ai.models import Diagnosis, EnvVar, OutputModel, TransformReport, Violation, WarningItem
 from ai.security import SourceMasker, credential_name
+from ai.transform.patch import canonical_patch
 from ai.transform.scope import check_patch_scope, rebase_targets
 from ai.transform.templates import template_changes
 from ai.transform.workspace import Workspace, make_diff, patch_paths, source_files
@@ -52,6 +53,13 @@ def _failure_code(error: ValueError | RuntimeError | SyntaxError) -> str:
         "git_timeout",
         "patch_scope_violation",
         "patch_target_not_found",
+        "patch_invalid_hunk",
+        "patch_duplicate_file",
+        "patch_context_not_found",
+        "patch_context_ambiguous",
+        "patch_overlapping_hunks",
+        "masked_patch_unresolved",
+        "masked_source_unaligned",
     }
     return code if code in allowed else "llm_patch_failed"
 
@@ -209,7 +217,12 @@ def _patch_candidate(
     masker: SourceMasker,
     *,
     targets: list[Violation] | None = None,
+    masked_sources: dict[str, str] | None = None,
 ) -> dict[str, str]:
+    if masker.contains_sensitive(diff):
+        raise ValueError("sensitive_value_in_patch")
+    if targets is not None:
+        diff = canonical_patch(before, diff, allowed, masked_sources or {})
     paths = patch_paths(diff, allowed)
     if masker.contains_sensitive(diff):
         raise ValueError("sensitive_value_in_patch")
@@ -274,11 +287,13 @@ def llm_patch(
             view = RepoView(workspace.root)
             masked = SourceMasker(view)
             sources = {}
+            masked_sources = {}
             budget = 20000
             for name in sorted({v.file for v in selected}):
                 if budget <= 0:
                     break
-                sources[name] = masked.source(view, name)[:budget]
+                masked_sources[name] = masked.source(view, name)
+                sources[name] = masked_sources[name][:budget]
                 budget -= len(sources[name])
             payload = {
                 "source": sources,
@@ -305,7 +320,12 @@ def llm_patch(
         if not proposal.diff:
             return current, []
         candidate = _patch_candidate(
-            current, proposal.diff, {v.file for v in selected}, masker, targets=scoped_targets
+            current,
+            proposal.diff,
+            set(sources),
+            masker,
+            targets=scoped_targets,
+            masked_sources=masked_sources,
         )
         with Workspace(candidate) as workspace:
             remaining = {(v.rule, v.file) for v in detect(RepoView(workspace.root))}

@@ -130,3 +130,50 @@ ai/.venv/bin/ruff format --check ai
 - Ruff check와 format check: **75개 Python 파일 통과**.
 - 로컬 개발 전체 결과와 개수가 다른 것은 별도 PR의 파일/테스트를 이 PR에 넣지 않았기 때문이다. 캐시 최신성 예상 실패 2개와 기존 deprecation 경고 1개는 동일하다.
 - 커밋 범위에 샘플, DB, 골든, LLM fixture, 캐시, 서비스, 인프라, IAM 파일과 생성 산출물은 포함하지 않았다.
+
+
+## 실제 Bedrock diff 적용 실패 수정과 재검증
+
+### 문제와 수정 이유
+
+실제 Sonnet 응답에서 파일 헤더의 `a/`, `b/` 접두사 누락과 잘못된 hunk 줄 수가 확인됐다. 또한 모델은 마스킹된 소스의 `[REDACTED]` 문맥을 반환하므로 이를 그대로 원본에 `git apply`하면 문맥이 맞지 않는다. 범위 검사를 통과하기 전에 전송 형식에서 실패하던 문제다.
+
+| 파일 | 변경 | 이유 |
+| --- | --- | --- |
+| `transform/patch.py` | 초기 변환용 diff 정규화 추가 | 실제 이전 줄이 정확하게 한 곳에서 일치할 때만 변경을 구성하고 올바른 Git diff를 다시 생성한다. 모델이 쓴 줄 번호/줄 수를 적용 위치의 근거로 쓰지 않는다. |
+| `transform/service.py` | 정규화 후 기존 승인 검사 수행, 고정 실패 코드 추가 | 형식 복구가 범위 승인으로 간주되지 않도록 원본 기준 경로·시크릿·AST·컴파일·신호·위반 해소 검사를 유지한다. |
+| `prompts/transform.txt` | 헤더·본문 형식, 정확한 문맥, 마스킹 표식 취급 명시 | 모델 응답의 형식 오류를 줄인다. |
+| `transform/scope.py` | `stream=sys.stdout`을 기존 로그 인자 사이에도 삽입 가능 | 실제 응답은 stdout 인자를 맨 앞에 넣었다. 기존 level/format 등 인자의 값과 상대 순서를 유지하면 같은 허용 변환이다. |
+| `test_transform_patch.py`, `test_transform_scope.py` | 추가 회귀 38개 | 형식 복구 성공과 범위·시크릿 보호를 함께 검증한다. |
+
+마스킹된 파일에서 바뀌지 않은 줄은 원본 줄을 그대로 복사한다. `[REDACTED]` 값을 시크릿으로 역치환하지 않는다. 수정·추가 줄에 표식이 남거나 마스킹 전후 줄 대응이 맞지 않으면 보류한다. 한 줄에 시크릿과 수정 대상이 함께 있어 표식을 제거할 수 없는 경우도 보류한다.
+
+허용 파일의 정확한 이름만 접두사를 보완한다. 경로 이탈, 새 파일·삭제·이름 변경, 파일 모드 변경, 중복 파일, 없는 문맥·중복 문맥·겹친 hunk는 거부한다. 문맥이 없는 순수 삽입도 추측하지 않는다. 초기 `llm_patch`에만 적용하며 runtime repair 경로는 확장하지 않았다.
+
+stdout 인자 위치를 허용해도 로그 level/format 변경, 기존 인자 순서 변경, stderr 사용, force/handlers 추가는 거부한다. 다른 업무 코드·인코딩·대상 밖 주석 보존 규칙도 유지한다.
+
+### 확인한 실제 호출 결과
+
+Haiku 4.5 / Sonnet 4.6으로 새 Bedrock 호출을 수행했다. 입력은 로컬에서 만든 작은 FastAPI 검증 앱이며 컨테이너 실행이나 배포를 하지 않았다.
+
+- 직접 변환: Sonnet 1회로 더미 시크릿 환경변수 추출·PORT 읽기·stdout 로그 3개 변경을 생성하고 실제 diff 적용·컴파일·범위 검사를 통과했다.
+- 전체 `run_analysis`: Haiku 진단 1회 → 고정 템플릿의 시크릿/포트 변경 → Sonnet 로그 수정 1회 → Haiku 추천 1회가 성공했다. `addressed_ids` 3개, `deferred_ids` 0개, `llm_attempts=1`, `patch_valid=true`, `compile_passed=true`, 추천 `rationale_source=llm`이다.
+- 성공 실행은 총 4회, 입력 5,525 / 출력 1,080 토큰이다. replay나 수동으로 응답을 바꾼 결과가 아니다.
+- 중간 실행에서는 직접 변환은 성공했으나 stdout 인자 순서 때문에 전체 흐름의 로그 수정이 3회 거부됐다. 이 오탐을 수정한 뒤 위 성공 실행을 확인했다. 이번 후속 작업의 실제 호출은 중간 실행 포함 총 9회다.
+- 이전에 형식 오류로 거부된 실제 응답 6개도 저장 응답을 이용한 오프라인 검사에서 통과했다. 이것은 추가 실시간 호출 성공 횟수로 집계하지 않는다.
+- 입력 앱·더미 DB 파일 fingerprint와 업무 함수의 AST가 보존됐다. DB 접속이나 데이터 이전을 검증한 것은 아니다.
+- 게이트는 `skipped`, `pr_eligible=false`다. 이번 성공은 safe 코드 변경안 검증이며 Docker/Postgres 게이트·자동 PR 자격·실제 배포 성공을 의미하지 않는다.
+- 모델 단가가 등록되지 않아 비용은 `null`이다. 토큰 사용량은 기록했으며 무료라고 표시하지 않는다.
+
+로컬 성공 증거는 `out/live-transform-fixed-d75km7zs/summary.json`, `direct-diff.patch`, `pipeline-result/changes.diff`, `pipeline-result/llm-trace.json`에 보관했다. 인증 정보나 생성 실행 산출물은 PR에 포함하지 않는다.
+
+### 최종 회귀 검증
+
+- 수정 전: 로컬 **354 passed, 5 skipped, 2 xfailed** / Ruff Python 81개 통과.
+- 수정 후: 로컬 **392 passed, 5 skipped, 2 xfailed** / Ruff Python 83개 통과.
+- 팀 PR 체크아웃: **377 passed, 5 skipped, 2 xfailed** / Ruff Python 77개 통과.
+- 팀 첫 실행에서는 CRLF 테스트 1개가 기존 `Workspace.read()`의 줄바꿈 정규화로 실패했다. 전송 형식 테스트가 파일 바이트를 직접 읽도록 수정했다. 별도 Windows PR의 구현은 가져오지 않았다.
+- 기존 Starlette/httpx 경고 1개와 캐시 엔진 불일치 예상 실패 2개는 유지한다.
+- 보호 파일 137개는 변하지 않았다. 골든, 샘플, 기존 응답 fixture, 데모 캐시는 갱신하지 않았다.
+
+재현은 위 전체 테스트 명령 또는 `ai/.venv/bin/python -m pytest ai/tests/test_transform_scope.py ai/tests/test_transform_patch.py -q`다. 실제 Bedrock 검증은 별도 유료 실행 기록이며 기본 pytest는 외부 호출 없이 통과한다. Docker 게이트·캐시 재생성·서비스/어댑터 연동과 PR 자격 결정은 후속 작업으로 남는다.

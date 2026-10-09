@@ -125,9 +125,17 @@ def _replacement(
             return True
         if any(k.arg in {"stream", "handlers"} for k in keywords):
             return False
-        stream = ast.parse("sys.stdout", mode="eval").body
-        expected.keywords.append(ast.keyword(arg="stream", value=stream))
-        return _resolves(stream, imports, "sys.stdout") and _same(expected, new)
+        streams = [k.value for k in new.keywords if k.arg == "stream"]
+        without_stream = ast.Call(
+            func=new.func,
+            args=new.args,
+            keywords=[k for k in new.keywords if k.arg != "stream"],
+        )
+        return (
+            len(streams) == 1
+            and _resolves(streams[0], imports, "sys.stdout")
+            and _same(expected, without_stream)
+        )
     if rule == "file_log":
         return (
             _resolves(new.func, imports, "logging.StreamHandler")

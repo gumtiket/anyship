@@ -50,6 +50,42 @@ def patch(tmp_path, before, after, rule="file_log", *, select=None, reference=No
 
 
 @pytest.mark.parametrize(
+    "arguments",
+    [
+        'stream=sys.stdout, level=logging.INFO, format="%(message)s"',
+        'level=logging.INFO, stream=sys.stdout, format="%(message)s"',
+        'level=logging.INFO, format="%(message)s", stream=sys.stdout',
+    ],
+)
+def test_stdout_keyword_can_be_inserted_without_reordering_existing_arguments(tmp_path, arguments):
+    after = "import sys\n" + SOURCE.replace(
+        'filename="app.log", level=logging.INFO, format="%(message)s"', arguments
+    )
+    (result, ids, attempts, warnings), _, targets = patch(tmp_path, SOURCE, after)
+    assert result["main.py"] == after and ids == [targets[0].id]
+    assert attempts == 1 and not warnings
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        'stream=sys.stderr, level=logging.INFO, format="%(message)s"',
+        'stream=sys.stdout, level=logging.CRITICAL, format="%(message)s"',
+        'stream=sys.stdout, format="%(message)s", level=logging.INFO',
+        'stream=sys.stdout, level=logging.INFO, format="%(message)s", force=True',
+        'stream=sys.stdout, level=logging.INFO, format="%(message)s", handlers=[]',
+    ],
+)
+def test_stdout_insertion_does_not_allow_other_argument_changes(tmp_path, arguments):
+    after = "import sys\n" + SOURCE.replace(
+        'filename="app.log", level=logging.INFO, format="%(message)s"', arguments
+    )
+    (result, ids, _, warnings), _, _ = patch(tmp_path, SOURCE, after)
+    assert result["main.py"] == SOURCE and not ids
+    assert "[patch_scope_violation]" in warnings[0].message
+
+
+@pytest.mark.parametrize(
     "extra",
     [
         ('"amount": 100', '"amount": 1'),
