@@ -99,7 +99,7 @@ else:
 | | `db_address` | (`aws-always-on`) 공용 RDS 주소. `*.rds.amazonaws.com`만 허용. 출력 `db_address` |
 | | `db_port` | 기본 5432 |
 | | `db_secret_arn` | (`aws-always-on`) RDS 마스터 비밀의 ARN. 출력 `db_master_secret_arn`. 비밀번호 자체가 아니다. 계정이 `role_arn`의 계정과 같아야 한다 |
-| | `state_bucket` | Terraform state 버킷. 온보딩 스택 출력 `StateBucketName`(이름은 계산할 수 없어 서비스가 저장해 둔다). `anyship-tfstate-<계정>-<리전>-<8자>` 형식만 허용하고 계정이 `role_arn`의 계정과 같아야 한다. `terraform_runner`가 쓴다 |
+| | `state_bucket` | Terraform state 버킷. 온보딩 스택 출력 `StateBucketName`(이름은 계산할 수 없어 서비스가 저장해 둔다. `AwsAccess.read_state_bucket(env, stack_name)`이 스택 출력에서 읽어 주며, 스택이 없거나 `CREATE_COMPLETE` 등 완료 상태가 아니거나 출력이 우리가 짓는 형식이 아니면 `stack_not_found`, `stack_not_ready`, `stack_output_invalid`로 실패한다). `anyship-tfstate-<계정>-<리전>-<8자>` 형식만 허용하고 계정이 `role_arn`의 계정과 같아야 한다. `terraform_runner`가 쓴다 |
 | `OnpremEnvironment` | `env_id` | 위와 같음 |
 | | `host` | IP 또는 호스트 이름(SSH 옵션을 끼워 넣을 수 있는 값은 거부) |
 | | `ssh_user` | 기본 `deploy` |

@@ -143,6 +143,50 @@ AWS 인증과 AssumeRole은 실제 AWS 어댑터 실행 환경의 책임입니�
 
 참고: [CloudFormation quick-create](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html), [타사 역할 접근과 External ID 검증](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html), [Boto3 STS](https://docs.aws.amazon.com/boto3/latest/reference/services/sts/client/assume_role.html).
 
+## 실제 배포 데이터 모델 (준비 중)
+
+실제 배포(`anyship_adapters.Deployer`)를 서비스에 붙이기 위한 데이터 모델입니다. **아직 API와 화면, 실행기는 없고**(후속 이슈), 위 Mock 배포와 별개입니다. Mock 테이블과 코드는 건드리지 않으며 실제 어댑터로 자동 대체하지도 않습니다.
+
+`python -m alembic upgrade head`로 `0008`을 적용하면 다음이 추가됩니다. 기존 데이터는 그대로이고 새 컬럼은 비어 있습니다.
+
+| 대상 | 내용 |
+|---|---|
+| `aws_environments` 컬럼 | `env_id`, `host`, `db_address`, `db_port`, `db_secret_arn`, `state_bucket` (모두 NULL 허용) |
+| `deployments` | 프로젝트당 하나의 실제 배포 대상: AWS 환경, 세트 이름, 앱 이름, 현재 이미지 태그, URL, 진행 중 작업과 `lease_until` |
+| `deploy_jobs` | 작업 이력: `(프로젝트, 요청 ID)`가 유일, 동작, 상태, 실패한 `stage`, 로그, 결과 |
+
+- `env_id`는 DNS 이름과 Terraform state의 키에 쓰는 **바뀌지 않는 값**(최대 21자, 유일)입니다. 정해지지 않았으면 환경 레코드 ID에서 `e` + 20자로 정합니다. 이미 기반을 만들어 둔 계정은 만들 때 쓴 값(예: `test`)을 직접 넣어야 기반을 찾습니다.
+- `host`, `db_address`, `db_port`, `db_secret_arn`은 공용 기반의 출력이고 `state_bucket`은 Terraform state를 두는 사용자 계정의 S3 버킷입니다. **모두 비밀이 아닙니다.** DB 비밀번호는 사용자 계정의 Secrets Manager에만 있고, 사용자가 배포 때 입력하는 비밀은 어느 컬럼에도 저장하지 않습니다.
+- `deployments.lease_until`은 작업 선점의 만료 시각(초)입니다. 첫 배포에서 공용 기반을 만드는 데 약 20분이 걸리므로 TTL은 그보다 길어야 합니다(25~30분 이상).
+
+`app/deploy_state.py`가 환경 레코드와 어댑터 사이를 잇습니다. 값을 바꾸면 곧바로 커밋합니다.
+
+| 함수 | 하는 일 |
+|---|---|
+| `assign_env_id(session, row)` | `env_id`가 없으면 정하고, 있으면 바꾸지 않습니다 |
+| `adapter_environment(row)` | 어댑터의 `AwsEnvironment`로 변환합니다. **`CONNECTED`이고 검증된 `role_arn`이 있는 환경만** 허용하며, 저장만 해 둔 `submitted_role_arn`으로 대신하지 않습니다 |
+| `ensure_state_bucket(session, row, access)` | `state_bucket`이 비어 있으면 `stack_name`의 온보딩 스택 출력(`StateBucketName`)에서 읽어 저장합니다 |
+| `save_foundation(session, row, fields)` | 배포가 성공하면 결과의 `details["foundation"]` 4개 값을 저장합니다. 어댑터 모델의 규칙(RDS 도메인, 같은 계정의 비밀 ARN 등)을 통과해야 합니다 |
+
+오류는 `DeployStateError(code, message)`이고 문구에 저장된 값을 싣지 않습니다. 스택 이름은 사용자가 콘솔에서 바꿀 수 있어서 `ensure_state_bucket`은 `stack_not_found`로 실패할 수 있습니다(어댑터의 `AwsAccess.read_state_bucket`이 내는 오류 코드: `stack_not_found`, `stack_not_ready`, `stack_output_invalid`, `invalid_stack_name`).
+
+**시험**
+
+```bash
+python -m pytest tests/test_real_deployment_migration.py tests/test_deploy_state.py -q   # SQLite. AWS를 부르지 않는다
+```
+
+실제 계정으로 확인하려면 서버에서 시험용 SQLite DB에 환경 한 건을 만들고(서비스 운영 DB는 건드리지 않음) 스크립트를 돌립니다.
+
+```bash
+cd service
+python ../scripts/seed_test_environment.py --database ~/anyship-test.db --role-arn <역할 ARN> --stack-name <온보딩 스택 이름>   # External ID는 입력창으로
+APP_DATABASE_URL=sqlite:////home/<사용자>/anyship-test.db python ../scripts/smoke_deploy_state.py --environment-id <출력된 ID> --env-id test
+```
+
+`smoke_deploy_state.py`는 진짜 `describe_stacks`로 `StateBucketName`을 읽고, `ensure_state_bucket`과 `TerraformRunner.read_foundation` 결과의 `save_foundation`까지 확인합니다(테스트 계정에서 11/11).
+PostgreSQL 마이그레이션은 서버에서 `alembic upgrade head`가 성공했고 테이블과 컬럼이 만들어진 것까지 확인했습니다. 다운그레이드는 SQLite 테스트로만 확인했습니다.
+
 ## 등록한 저장소 연결 삭제
 
 프로젝트 상세 화면 아래의 **저장소 연결 삭제**에서 대상을 확인하면 `DELETE /api/projects/{id}`를 호출합니다. 로그인·Origin·CSRF와 현재 워크스페이스 소속을 확인하고, 프로젝트 및 서비스 DB의 분석·검토 기록(`CodeChange`, `DemoChange`)을 한 트랜잭션으로 삭제해 `204`를 반환합니다. 진행 중인 작업이 있으면 정리를 취소하고 `409`를 반환합니다. 삭제 후 목록에서 사라지고 상세 조회·재삭제는 `404`이며, 같은 저장소를 다시 연결할 수 있습니다.
