@@ -1,0 +1,161 @@
+import json
+from datetime import datetime, timezone
+
+import pytest
+
+boto3 = pytest.importorskip("boto3")  # AWS 기능은 선택 의존성이라, 없으면 이 파일의 테스트만 건너뛴다
+from botocore.exceptions import NoCredentialsError  # noqa: E402
+from botocore.stub import ANY, Stubber  # noqa: E402
+
+from anyship_adapters.aws_access import AwsAccess, AwsAccessError  # noqa: E402
+from anyship_adapters.models import AwsEnvironment  # noqa: E402
+
+ACCOUNT = "223455088214"
+EXTERNAL_ID = "ext-id-0123456789abcdef"
+SECRET_ARN = f"arn:aws:secretsmanager:ap-northeast-2:{ACCOUNT}:secret:rds!db-0a1b2c3d-AbCdEf"
+MASTER = "M4ster-Pass-0123456789"
+# 비밀 스캐너가 진짜 키로 오해하지 않도록 AKIA/ASIA로 시작하지 않는 가짜 값을 쓴다.
+CREDS = {"AccessKeyId": "TESTKEYID0123456789", "SecretAccessKey": "test-secret-key", "SessionToken": "test-token",
+         "Expiration": datetime(2026, 10, 10, tzinfo=timezone.utc)}
+
+
+@pytest.fixture(autouse=True)
+def fake_aws_credentials(monkeypatch):
+    # 진짜 자격 증명이 없어도 클라이언트를 만들 수 있게 하고, 실수로 진짜 AWS를 부르는 일을 막는다.
+    for key, value in {"AWS_ACCESS_KEY_ID": "test", "AWS_SECRET_ACCESS_KEY": "test",
+                       "AWS_DEFAULT_REGION": "ap-northeast-2"}.items():
+        monkeypatch.setenv(key, value)
+
+
+def env(**override):
+    values = dict(env_id="test", role_arn=f"arn:aws:iam::{ACCOUNT}:role/deploy-service-role",
+                  external_id=EXTERNAL_ID, db_secret_arn=SECRET_ARN)
+    return AwsEnvironment(**{**values, **override})
+
+
+class FakeSession:
+    def __init__(self, clients):
+        self.clients, self.requested = clients, []
+
+    def client(self, name, **kwargs):
+        self.requested.append((name, kwargs))
+        return self.clients[name]
+
+
+def stubbed(service):
+    client = boto3.client(service, region_name="ap-northeast-2")
+    return client, Stubber(client)
+
+
+def make(base=None, assumed=None):
+    """base는 서비스 서버의 자격 증명, assumed는 역할을 맡은 뒤의 자격 증명으로 만든 세션. (access, 세션 생성 기록)"""
+    created = []
+
+    def factory(**credentials):
+        created.append(credentials)
+        return FakeSession(assumed if credentials else base)
+
+    return AwsAccess(factory), created
+
+
+def assume_ok(stub):
+    stub.add_response("assume_role", {"Credentials": CREDS},
+                      {"RoleArn": env().role_arn, "ExternalId": EXTERNAL_ID, "DurationSeconds": 900,
+                       "RoleSessionName": ANY})
+
+
+def identity(stub, account=ACCOUNT):
+    stub.add_response("get_caller_identity", {"Account": account, "Arn": f"arn:aws:sts::{account}:assumed-role/r/s",
+                                              "UserId": "AROATEST:s"})
+
+
+# --- check_role ------------------------------------------------------------------------------
+def test_check_role_assumes_the_role_with_the_external_id_and_returns_the_account():
+    sts, sts_stub = stubbed("sts")
+    assumed_sts, assumed_stub = stubbed("sts")
+    assume_ok(sts_stub)
+    identity(assumed_stub)
+    access, created = make({"sts": sts}, {"sts": assumed_sts})
+    with sts_stub, assumed_stub:
+        assert access.check_role(env()) == ACCOUNT
+    # 두 번째 세션은 역할을 맡아 받은 임시 자격 증명으로 만들어야 한다.
+    assert created[1]["aws_access_key_id"] == CREDS["AccessKeyId"]
+    assert created[1]["aws_session_token"] == CREDS["SessionToken"]
+
+
+def test_a_role_in_another_account_than_the_verified_one_is_rejected():
+    sts, sts_stub = stubbed("sts")
+    assumed_sts, assumed_stub = stubbed("sts")
+    assume_ok(sts_stub)
+    identity(assumed_stub, account="111111111111")
+    access, _ = make({"sts": sts}, {"sts": assumed_sts})
+    with sts_stub, assumed_stub, pytest.raises(AwsAccessError) as caught:
+        access.check_role(env())
+    assert caught.value.error.code == "account_mismatch"
+
+
+@pytest.mark.parametrize("aws_code, status, code, retryable", [
+    ("AccessDenied", 403, "access_denied", False),
+    ("ExpiredToken", 400, "service_credentials_unavailable", False),
+    ("InvalidClientTokenId", 403, "service_credentials_unavailable", False),
+    ("Throttling", 400, "aws_unavailable", True),
+])
+def test_aws_errors_become_codes_that_never_echo_the_arn_or_external_id(aws_code, status, code, retryable):
+    sts, stub = stubbed("sts")
+    stub.add_client_error("assume_role", service_error_code=aws_code, http_status_code=status,
+                          service_message=f"role {env().role_arn} external {EXTERNAL_ID}")
+    access, _ = make({"sts": sts})
+    with stub, pytest.raises(AwsAccessError) as caught:
+        access.check_role(env())
+    error = caught.value.error
+    assert (error.code, error.retryable) == (code, retryable)
+    assert EXTERNAL_ID not in error.model_dump_json() and env().role_arn not in error.model_dump_json()
+
+
+def test_missing_service_credentials_are_reported_as_such():
+    class NoCredentials:
+        def assume_role(self, **kwargs):
+            raise NoCredentialsError()
+
+    access, _ = make({"sts": NoCredentials()})
+    with pytest.raises(AwsAccessError) as caught:
+        access.check_role(env())
+    assert caught.value.error.code == "service_credentials_unavailable"
+
+
+# --- read_master_password --------------------------------------------------------------------
+def secret_stubs(secret_string):
+    sts, sts_stub = stubbed("sts")
+    secrets, secrets_stub = stubbed("secretsmanager")
+    assume_ok(sts_stub)
+    secrets_stub.add_response("get_secret_value", {"ARN": SECRET_ARN, "Name": "rds!db-0a1b2c3d",
+                                                   "SecretString": secret_string}, {"SecretId": SECRET_ARN})
+    access, created = make({"sts": sts}, {"secretsmanager": secrets})
+    return access, created, sts_stub, secrets_stub
+
+
+def test_the_master_password_is_read_with_the_assumed_role_in_the_secrets_region():
+    secret = json.dumps({"username": "anyship_admin", "password": MASTER})
+    access, created, sts_stub, secrets_stub = secret_stubs(secret)
+    with sts_stub, secrets_stub:
+        assert access.read_master_password(env()) == MASTER
+    assert created[1]["aws_session_token"] == CREDS["SessionToken"]
+
+
+@pytest.mark.parametrize("arn", [None, "arn:aws:secretsmanager:ap-northeast-2:111111111111:secret:rds!db-x"])
+def test_a_missing_or_foreign_secret_arn_is_rejected_before_any_aws_call(arn):
+    calls = []
+    access = AwsAccess(lambda **kwargs: calls.append(kwargs))
+    with pytest.raises(AwsAccessError) as caught:
+        access.read_master_password(env(db_secret_arn=arn))
+    assert caught.value.error.code == "invalid_secret_arn" and calls == []
+
+
+@pytest.mark.parametrize("secret", ['{"username": "u"}', "not json", json.dumps({"password": "a\nb"}),
+                                    json.dumps({"password": ""}), json.dumps({"password": 1234})])
+def test_an_unusable_secret_is_rejected_without_leaking_its_content(secret):
+    access, _, sts_stub, secrets_stub = secret_stubs(secret)
+    with sts_stub, secrets_stub, pytest.raises(AwsAccessError) as caught:
+        access.read_master_password(env())
+    assert caught.value.error.code == "secret_unreadable"
+    assert secret not in caught.value.error.model_dump_json()
