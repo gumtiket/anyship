@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from .config import Settings
 from .db import CodeChange, DemoChange, LoginSession, Membership, OAuthAttempt, Project, RepositoryConnection, User, Workspace, database
 from .github_api import DemoGitHub, GitHubAPI, GitHubFailure
-from . import aws_onboarding, code_changes, demo_changes, mock_deployments, onboarding
+from . import ai_analyses, aws_onboarding, code_changes, demo_changes, mock_deployments, onboarding
 from .aws_adapter import AwsAdapter
 
 auth_logger = logging.getLogger("anyship.auth")
@@ -54,14 +54,19 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
     cipher = Fernet(settings.token_key.encode() if settings.token_key else Fernet.generate_key())
     github = gateway or (DemoGitHub() if settings.demo else GitHubAPI())
     mock_runner = mock_deployments.MockRunner(settings, sessions) if settings.deployment_mode == "mock" else None
+    ai_runner = ai_analyses.AnalysisRunner(sessions, github) if settings.ai_mode in ("fake", "bedrock") else None
 
     @asynccontextmanager
     async def lifespan(app):
         try:
+            if ai_runner:
+                ai_runner.start()
             if mock_runner:
                 mock_runner.start()
             yield
         finally:
+            if ai_runner:
+                ai_runner.close()
             if mock_runner:
                 mock_runner.close()
             engine.dispose()
@@ -70,6 +75,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
     app.state.engine = engine
     app.state.sessions = sessions
     app.state.mock_runner = mock_runner
+    app.state.ai_runner = ai_runner
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request, error):
@@ -176,7 +182,9 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
                 "aws_verification_available": settings.aws_configured and aws_adapter is not None,
                 "aws_regions": list(settings.aws_regions),
                 "aws_setup_issues": settings.aws_setup_issues,
-                "ai_available": False, "ai_mode": settings.ai_mode, "demo_changes_available": settings.demo,
+                "ai_available": settings.ai_mode == "bedrock" and settings.ai_configured and not settings.demo,
+                "ai_mode": settings.ai_mode, "demo_changes_available": settings.demo,
+                "ai_analysis_available": settings.ai_configured and not settings.demo,
                 "deployment_mode": settings.deployment_mode,
                 "callback_url": settings.app_origin + "/api/auth/github/callback"}
 
@@ -265,7 +273,8 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
         return [{"id": item["id"], "account": item["account"]["login"]} for item in installations(login)]
 
     def resolve_repository(login, url):
-        result = onboarding.inspect_access(github, access_token(login), onboarding.repository_name(url), settings.demo)
+        result = onboarding.inspect_access(github, access_token(login), onboarding.repository_name(url), settings.demo,
+            require_pr=settings.ai_mode not in ("fake", "bedrock"))
         if result["status"] != "ready":
             raise HTTPException(404 if result["status"] == "authorization_required" else 403, result["message"])
         return result["installation_id"], result["repository"]
@@ -310,6 +319,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
         if project is None:
             raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
         mock_deployments.clear_targets(session, project_id=project_id)
+        ai_analyses.clear_jobs(session, project_id)
         # Conditional deletes compete with workflow claims on the same rows.
         # Keep all changes in one transaction so a busy child rolls back cleanup.
         session.execute(delete(CodeChange).where(
@@ -355,7 +365,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
             raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
         return row
 
-    def real_project(project_id, login, session):
+    def real_project(project_id, login, session, *, require_pr=True):
         if settings.demo:
             raise HTTPException(409, "실제 GitHub 로그인 모드로 실행해 주세요.")
         project = owned_project(project_id, login, session)
@@ -366,9 +376,20 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
         if not installation:
             raise HTTPException(404, "GitHub App 연결이 해제되었습니다.")
         permissions = installation.get("permissions", {})
-        if installation.get("suspended_at") or any(permissions.get(key) != "write" for key in ("contents", "pull_requests")):
-            raise HTTPException(403, "GitHub App의 Contents와 Pull requests를 Read and write로 설정하고 설치 권한을 승인해 주세요.")
+        required = ("contents", "pull_requests") if require_pr else ("contents",)
+        if installation.get("suspended_at") or any(permissions.get(key) != "write" for key in required):
+            names = "Contents와 Pull requests" if require_pr else "Contents"
+            raise HTTPException(403, f"GitHub App의 {names}를 Read and write로 설정하고 설치 권한을 승인해 주세요.")
         return project
+
+    app.include_router(ai_analyses.router(settings, ai_runner, db, current, mutation,
+        owned_project, lambda pid, login, session: real_project(pid, login, session, require_pr=False), access_token))
+
+    @app.get("/api/projects/{project_id}/branches")
+    def project_branches(project_id: str, login=Depends(current), session=Depends(db)):
+        project = real_project(project_id, login, session, require_pr=False)
+        return [{"name": branch["name"], "sha": branch["commit"]["sha"]}
+                for branch in github.branches(access_token(login), project.full_name)]
 
     def change_json(row):
         if not row:

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Check, ExternalLink, FileCode2, GitPullRequest, LoaderCircle, RefreshCw, Sparkles } from 'lucide-react';
+import { AIAnalysis } from './AIAnalysis';
 
 type Change = {
   id: string; status: string; file: string; title: string; content: string; diff: string;
@@ -7,12 +8,17 @@ type Change = {
   pr_url: string; pr_number: number; busy: boolean; error: string;
 };
 type Props = {
-  projectId: string; csrf: string; aiMode: string;
+  projectId: string; csrf: string; aiMode: string; repository: string; sourceBranch: string;
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
   onError: (error: unknown) => void;
 };
 
-export function ChangeWorkflow({ projectId, csrf, aiMode, request, onError }: Props) {
+export function ChangeWorkflow(props: Props) {
+  if (props.aiMode !== 'placeholder') return <AIAnalysis {...props}/>;
+  return <PlaceholderWorkflow {...props}/>;
+}
+
+function PlaceholderWorkflow({ projectId, csrf, aiMode, request, onError }: Props) {
   const [change, setChange] = useState<Change | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);

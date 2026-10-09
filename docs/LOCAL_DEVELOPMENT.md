@@ -1,6 +1,6 @@
 # AnyShip 로컬 실행 및 실제 GitHub 테스트
 
-AnyShip은 GitHub 로그인 → 저장소 URL 등록 → 수정 항목 등록·실행 → diff 검토 → 실제 GitHub Draft PR 생성을 제공합니다. 현재 AI만 임시 구현입니다. `APP_AI_MODE=placeholder`로 실행하면 `anyship_ai_placeholder.py`에 AI 미연결 안내 주석을 추가합니다. 가짜 로그인·저장소·PR로 대체하지 않습니다.
+AnyShip은 GitHub 로그인 → 저장소/기준 브랜치 선택 → 새 작업 브랜치 생성 → AI 분석·수정안 검토·커밋을 제공합니다. [브랜치 기반 AI 작업 설정](../service/README.md#기준-브랜치--새-작업-브랜치--ai-수정-커밋-35)의 설치와 `0009` 마이그레이션을 적용하세요. `APP_AI_MODE=bedrock`은 실제 AI, `fake`는 개발용 고정 모델 응답이며 두 모드 모두 브랜치·커밋은 실제 GitHub에 저장합니다. `placeholder`는 안내 파일·Draft PR 흐름을 시험하는 기존 모드입니다.
 
 ## 이 PC에서 실행
 
@@ -67,7 +67,7 @@ SQLite로 되돌릴 때는 서버를 종료하고 백업 `profile.env`에 있는
 1. [GitHub App 생성](https://github.com/settings/apps/new)을 엽니다. 표시 이름은 AnyShip을 사용하되 GitHub에서 이름이 이미 사용 중이면 사용 가능한 이름을 지정합니다. 서비스 UI 이름은 AnyShip으로 유지됩니다.
 2. Homepage URL은 `http://localhost:8000`, **Redirect URI**(문서에서 Callback URL이라고도 부름)는 `http://localhost:8000/api/auth/github/callback`, Setup URL은 `http://localhost:8000/`로 설정합니다. **Redirect on update**도 켜면 기존 설치의 저장소 접근 범위를 변경한 뒤 AnyShip으로 돌아옵니다. `localhost`와 `127.0.0.1`을 혼용하지 마세요.
 3. 사용자 액세스 토큰 만료 기능은 유지합니다. **Request user authorization (OAuth) during installation**은 해제합니다. 서비스 로그인 버튼으로 별도 인증합니다. 이 MVP는 웹훅을 사용하지 않으므로 **Active webhook**도 해제합니다.
-4. Repository permissions에서 **Contents: Read and write**, **Pull requests: Read and write**를 설정합니다. Metadata 읽기는 기본 권한입니다. 외부 사용자도 설치할 수 있도록 설치 대상을 **Any account**로 설정합니다.
+4. Repository permissions에서 **Contents: Read and write**를 설정합니다. 기존 placeholder Draft PR 모드도 사용할 경우 **Pull requests: Read and write**가 추가로 필요합니다. Metadata 읽기는 기본 권한입니다. 외부 사용자도 설치할 수 있도록 설치 대상을 **Any account**로 설정합니다.
 5. 생성 후 Client ID를 확인하고 Client secret을 생성합니다. 공개 App 페이지의 URL `https://github.com/apps/앱이름` 마지막 부분이 App slug입니다. GitHub가 설치 전에 private key 생성을 요구하면 **Private keys → Generate a private key**로 생성해 내려받은 파일을 안전하게 보관합니다. 현재 AnyShip 서버는 사용자 토큰 방식이므로 이 private key를 설정에 입력하거나 사용하지 않습니다.
 6. `service/.env.github.local`의 다음 세 값을 로컬 편집기로 입력합니다. 비밀키를 채팅이나 저장소에 올리지 마세요.
 
@@ -82,6 +82,12 @@ APP_GITHUB_APP_SLUG=실제_App_slug
 참고: [GitHub App 사용자 인증](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app), [Git tree 생성](https://docs.github.com/en/rest/git/trees#create-a-tree), [PR 생성 권한](https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request).
 
 ## 직접 테스트할 순서
+
+기본 Fake 또는 Bedrock 모드에서는 GitHub 로그인과 저장소 연결 후 프로젝트 화면의 기준 브랜치를 선택합니다. **새 작업 브랜치 생성 · 분석 시작** → 전체 diff 확인 → **전체 수정안 검토 완료** → **검토한 수정안을 작업 브랜치에 커밋** 순서로 진행합니다. 브랜치와 커밋 링크로 결과를 확인합니다. Fake는 유료 모델 호출을 하지 않지만 실제 브랜치·커밋을 생성합니다. Bedrock 모드의 실제 모델 호출에는 비용이 발생할 수 있습니다.
+
+### 기존 placeholder Draft PR 모드
+
+아래 순서는 `APP_AI_MODE=placeholder`를 명시한 기존 흐름입니다.
 
 1. 커밋이 하나 이상 있는 본인의 GitHub 테스트 저장소를 준비합니다. 예: README가 있는 저장소. 계정에는 저장소 쓰기 권한이 있어야 합니다.
 2. AnyShip에서 **GitHub로 시작하기**를 눌러 로그인합니다.
@@ -110,21 +116,21 @@ APP_GITHUB_APP_SLUG=실제_App_slug
 ```dotenv
 APP_ENV=development
 APP_DEMO=false
-APP_AI_MODE=placeholder
+APP_AI_MODE=fake
 APP_APP_ORIGIN=http://localhost:8000
 # 비워 두면 실행 도우미가 프로젝트 전용 PostgreSQL 접속 정보를 생성합니다.
 APP_DATABASE_URL=
 # APP_TOKEN_KEY는 실행 스크립트가 생성합니다. 기존 키를 교체하면 재로그인이 필요합니다.
 ```
 
-`APP_AI_MODE=unavailable`이면 AI 작업을 차단합니다. 실제 AI 제공자가 구현되기 전에는 운영 환경에서 임시 분석 기능을 사용할 수 없습니다. 이전 데모 DB와 실제 GitHub DB는 분리하여 기존 샘플 계정이 실제 작업에 사용되지 않게 합니다. 예전 `-Mode demo` 실행은 지원하지 않으며 기본 실행은 GitHub 모드입니다. 이전 데이터 보존을 위해 데모 테이블과 격리된 레거시 API는 남아 있지만 AnyShip 화면에서는 사용하지 않습니다.
+`APP_AI_MODE=unavailable`이면 새 AI 작업을 차단하고 기존 이력만 제공합니다. 실제 AI를 사용하려면 `bedrock`과 Bedrock 리전·Strong/Fast 모델 ID 및 서버의 AWS 인증을 설정하세요. 운영 환경에서는 `fake`와 `placeholder`를 사용할 수 없습니다. 이전 데모 DB와 실제 GitHub DB는 분리하여 기존 샘플 계정이 실제 작업에 사용되지 않게 합니다. 예전 `-Mode demo` 실행은 지원하지 않으며 기본 실행은 GitHub 모드입니다. 이전 데이터 보존을 위해 데모 테이블과 격리된 레거시 API는 남아 있지만 AnyShip 화면에서는 사용하지 않습니다.
 
 Python 3.12 이상, Node.js 22 이상, pnpm과 PostgreSQL 실행 파일을 준비한 새 환경에서는 다음을 실행합니다.
 
 ```powershell
 cd service
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[web,test]"
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 cd ..\frontend
 pnpm install --frozen-lockfile
 pnpm build

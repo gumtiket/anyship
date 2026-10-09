@@ -91,6 +91,15 @@ class GitHubAPI:
             "tree": [{"path": filename, "mode": "100644", "type": "blob", "content": content}],
         })["sha"]
 
+    def recursive_tree(self, token, name, sha):
+        data = self.get(token, f"/repos/{name}/git/trees/{quote(sha, safe='')}", {"recursive": "1"})
+        if data.get("truncated"):
+            raise GitHubFailure(409)
+        return data
+
+    def blob(self, token, name, sha):
+        return self.get(token, f"/repos/{name}/git/blobs/{quote(sha, safe='')}")
+
     def create_commit(self, token, name, base_sha, tree_sha, message):
         return self.post(token, f"/repos/{name}/git/commits", {
             "message": message, "tree": tree_sha, "parents": [base_sha],
@@ -106,6 +115,16 @@ class GitHubAPI:
 
     def create_ref(self, token, name, branch, sha):
         return self.post(token, f"/repos/{name}/git/refs", {"ref": f"refs/heads/{branch}", "sha": sha})
+
+    def create_changes_tree(self, token, name, base_tree, entries):
+        return self.post(token, f"/repos/{name}/git/trees", {"base_tree": base_tree, "tree": entries})["sha"]
+
+    def update_ref(self, token, name, branch, sha):
+        return self._request("PATCH", f"https://api.github.com/repos/{name}/git/refs/heads/{quote(branch, safe='')}",
+            json={"sha": sha, "force": False}, headers={
+                "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            })
 
     def find_pr(self, token, name, branch, base):
         data = self.get(token, f"/repos/{name}/pulls", {
