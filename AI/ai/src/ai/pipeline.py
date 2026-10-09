@@ -51,9 +51,7 @@ def _write_output(path: Path, text: str) -> None:
     # Replacing the directory entry also preserves a source file hard-linked to old output.
     temporary = None
     try:
-        with NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="", dir=path.parent, delete=False
-        ) as file:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as file:
             temporary = Path(file.name)
             file.write(text)
         temporary.replace(path)

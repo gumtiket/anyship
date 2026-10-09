@@ -23,7 +23,7 @@ def main():
         config.write_text((service / '.env.web.example').read_text(encoding='utf-8'), encoding='utf-8')
     values = dotenv_values(config)
     if not values.get('APP_AI_MODE'):
-        set_key(config, 'APP_AI_MODE', 'fake')
+        set_key(config, 'APP_AI_MODE', 'placeholder')
         values = dotenv_values(config)
     if not values.get('APP_TOKEN_KEY'):
         set_key(config, 'APP_TOKEN_KEY', Fernet.generate_key().decode())

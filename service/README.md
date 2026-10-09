@@ -2,39 +2,6 @@
 
 AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안내](../docs/LOCAL_DEVELOPMENT.md)를 참고하세요. 아래는 AWS 환경 등록 API와 독립적으로 사용할 수 있는 GitHub 모듈의 안내입니다.
 
-## 기준 브랜치 → 새 작업 브랜치 → AI 수정 커밋 (#35)
-
-프로젝트 화면에서 기준 브랜치를 선택하고 **새 작업 브랜치 생성 · 분석 시작**을 누릅니다. 서버는 해당 시점의 SHA를 고정하고 `anyship/ai-<작업 UUID>` 브랜치를 먼저 만든 뒤, 그 커밋의 코드를 분석합니다. 전체 diff와 위험·보류 항목을 검토하고 **검토 완료 → 작업 브랜치에 커밋**을 누르면 새 브랜치에 수정안이 저장됩니다. 원본 브랜치의 후속 커밋은 이 작업에 섞이지 않습니다.
-
-| 설정 | 동작 |
-| --- | --- |
-| `APP_AI_MODE=bedrock` | 기존 AI 모듈의 Bedrock 클라이언트로 실제 진단·수정안 생성 |
-| `APP_AI_MODE=fake` | 개발용 고정 모델 응답. 브랜치·커밋은 실제 GitHub에 저장 |
-| `APP_AI_MODE=placeholder` | 기존 안내 파일·Draft PR 흐름 유지 |
-| `APP_AI_MODE=unavailable` | 분석 이력 조회만 제공 |
-
-실제 AI에는 `BEDROCK_REGION`, `BEDROCK_MODEL_ID_STRONG`, `BEDROCK_MODEL_ID_FAST`와 서버의 AWS SDK 자격 증명 체인(환경 변수, 프로필 또는 워크로드 역할)이 필요합니다. 해당 모델에 대한 Bedrock 호출 권한을 준비하고 서버를 재시작합니다. GitHub 로그인 토큰·DB 비밀은 모델 작업 프로세스로 전달하지 않습니다. Fake 모드는 AWS 자격 증명을 전달하지 않으며 운영 환경에서 금지됩니다. 유료 모델 호출은 사용자가 분석을 시작할 때만 발생합니다.
-
-GitHub App의 `Contents: Read and write`와 이용자의 저장소 쓰기 권한이 필요합니다. 이 흐름에는 PR 권한이 필요하지 않습니다. 저장소 규칙에 의해 브랜치 생성이나 갱신이 거부되면 실패 상태를 표시합니다. Git 참조 갱신은 항상 [fast-forward 방식](https://docs.github.com/en/rest/git/refs#update-a-reference)을 사용합니다.
-
-API는 세션·CSRF·워크스페이스 소유권을 확인합니다.
-
-| API | 역할 |
-| --- | --- |
-| `GET /api/projects/{project}/branches` | 접근 가능한 기준 브랜치 목록 |
-| `POST /api/projects/{project}/ai-analyses` | `{request_id: UUID, create_branch: true, base_branch: "release/v1"}`. SHA 고정·브랜치 생성·비동기 분석 |
-| `GET /api/projects/{project}/ai-analyses[/{id}]` | 작업 이력, 기준 SHA, 작업 브랜치, diff, 상태·실패 사유 |
-| `POST …/ai-analyses/{id}/review` | `{review_hash, selected_bundle_ids: ["all-changes"]}`로 전체 수정안 검토 |
-| `POST …/ai-analyses/{id}/commit` | 같은 검토 해시로 새 작업 브랜치에 커밋 |
-
-같은 `request_id`는 같은 분석을 반환합니다. 실패한 분석은 새 요청 ID로 재시작하며 기존 원격 브랜치는 유지합니다. 커밋 실패는 **같은 작업의 commit 요청**으로 재시도합니다. 저장한 커밋 SHA와 원격 상태를 대조해 통신 중단 후 중복 반영을 막습니다. 작업 브랜치가 외부에서 수정·삭제되면 자동으로 덮어쓰거나 재생성하지 않습니다. 검토 기록과 커밋은 재시작 후에도 남습니다. 기존 `create_branch` 미지정 Fake API 요청은 분석·검토만 하며 원격 쓰기를 하지 않습니다.
-
-스냅샷은 UTF-8 코드 최대 200개, 파일당 512 KiB, 총 5 MiB로 제한합니다. 환경·키 파일과 빌드 산출물·의존성 폴더는 제외하고 심볼릭 링크·서브모듈 및 불완전한 트리는 거부합니다. diff를 원래 스냅샷에 다시 적용하고 파일 권한과 변경하지 않은 파일을 보존합니다. 전체 묶음 단위 검토만 지원하며 GitHub Actions 워크플로 수정은 지원하지 않습니다.
-
-이번 범위는 1–3단계(기준 선택·새 브랜치 생성·AI 분석/수정 커밋)입니다. 대상 앱의 빌드·컨테이너 검증·배포·자동 수정 재빌드·PR 생성은 이 경로에서 실행하지 않습니다. Python 문법 확인만 수행하며, 대상 저장소의 기존 push 트리거 CI는 GitHub 설정에 따릅니다. Bedrock 분석 프로세스 제한은 420초, Fake는 90초입니다. 10분 동안 끝나지 않은 작업은 중단으로 처리합니다.
-
-검증: `python -m pytest tests/test_ai_analyses.py tests/test_ai_branches.py -q`는 외부 GitHub/AWS 호출 없이 실제 Fake 분석 파이프라인과 HTTP 대역으로 권한, SHA 고정, 충돌, 검토 변조, 재시도 및 원본 보존을 확인합니다.
-
 ## Mock 어댑터로 배포 흐름 시험하기
 
 Infra의 `MockAdapter`를 사용하는 개발 전용 기능입니다. 실제 AWS·SSH·GitHub 배포 요청이나 이미지 빌드를 하지 않으며, 기존 AWS의 검증된 연결 상태도 바꾸지 않습니다.
