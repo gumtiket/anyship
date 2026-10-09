@@ -20,7 +20,8 @@ RUN = ("docker", "compose", "--project-directory", "/opt/apps/todo", "run")
 
 def server(**overrides):
     """정상 서버: Traefik이 실행 중이고, 공개 IP를 알려 준다. overrides로 특정 명령만 바꾼다."""
-    responses = {("docker", "ps"): (0, b"traefik\n", b""), ("curl",): (0, b"3.38.88.141\n", b"")}
+    # 실제 서버에서 Compose로 띄운 컨테이너의 이름은 traefik이 아니라 traefik-traefik-1이다.
+    responses = {("docker", "ps"): (0, b"traefik-traefik-1\n", b""), ("curl",): (0, b"3.38.88.141\n", b"")}
     responses.update({tuple(key.split()): value for key, value in overrides.items()})
     return FakeServer(responses=responses)
 
@@ -64,14 +65,22 @@ def test_check_reports_an_unreachable_server_and_stops_there():
     assert [c[0] for c in srv.commands] == ["true"]
 
 
+def test_the_proxy_is_found_by_its_compose_labels_not_by_a_container_name():
+    srv = server()
+    adapter(srv).check(ENV, Log())
+    command = next(c for c in srv.commands if c[:2] == ["docker", "ps"])
+    assert "label=com.docker.compose.project=traefik" in command
+    assert "label=com.docker.compose.service=traefik" in command
+    assert not any(part.startswith("name=") for part in command)
+
+
 def test_check_tells_a_failing_command_from_an_unreachable_server():
     assert adapter(server(**{"true": (1, b"", b"")})).check(ENV, Log()).error.code == "ssh_command_failed"
 
 
 @pytest.mark.parametrize("overrides, code", [
     ({"docker compose version": (1, b"", b"")}, "docker_missing"),
-    ({"docker ps": (0, b"", b"")}, "proxy_not_ready"),
-    ({"docker ps": (0, b"traefik-old\n", b"")}, "proxy_not_ready"),  # 이름이 정확히 traefik이어야 한다
+    ({"docker ps": (0, b"", b"")}, "proxy_not_ready"),  # 실행 중인 Traefik이 없다
     ({"curl": (0, b"10.0.0.5", b"")}, "public_ip_unknown"),  # 사설 주소
     ({"curl": (0, b"169.254.169.254", b"")}, "public_ip_unknown"),
     ({"curl": (0, b"<html>", b"")}, "public_ip_unknown"),

@@ -62,9 +62,13 @@ class OnpremAdapter:
                 "docker_missing", "서버에 Docker 또는 Docker Compose가 없습니다.",
                 hint="서버 준비 스크립트(setup.sh)를 실행해 주세요."))
         _step(log, 3, 4, "프록시 확인", "HTTPS를 처리하는 Traefik이 실행 중인지 확인하는 중")
-        proxy = ssh.run(["docker", "ps", "--filter", "name=^traefik$", "--filter", "status=running",
-                         "--format", "{{.Names}}"])
-        if "traefik" not in proxy.stdout.split():
+        # 컨테이너 이름(traefik-traefik-1 등)은 Compose 설정에 따라 달라지므로, 이름이 아니라
+        # Compose가 붙이는 라벨(프로젝트 traefik의 서비스 traefik)로 실행 중인 것을 찾는다.
+        proxy = ssh.run(["docker", "ps",
+                         "--filter", "label=com.docker.compose.project=traefik",
+                         "--filter", "label=com.docker.compose.service=traefik",
+                         "--filter", "status=running", "--format", "{{.Names}}"])
+        if not proxy.stdout.strip():
             return CheckResult(ok=False, error=_err(
                 "proxy_not_ready", "서버에서 Traefik이 실행 중이지 않습니다.",
                 hint="/opt/apps/traefik에서 Traefik을 먼저 시작해 주세요."))
