@@ -183,7 +183,10 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
 - **`check`가 서비스의 `STSAdapter.check`와 다른 이유**: 서비스의 것은 환경 등록 때 한 번 하는 신뢰 정책 검증
   (External ID 필수 여부, 계정 일치)이고, 이쪽은 배포 직전 점검(역할, 호스트, Docker, Traefik)입니다.
   오류 코드 이름(`access_denied`, `account_mismatch`, `service_credentials_unavailable`, `aws_unavailable`)은 서로 맞췄습니다.
-- 이미지는 온프레미스와 같이 서비스 서버의 로컬 이미지를 SSH로 보냅니다(레지스트리 없음).
+- 이미지는 온프레미스와 같이 서비스 서버의 로컬 이미지를 SSH로 보냅니다(레지스트리 없음). 이미지는 아래 `이미지 빌더`가 만듭니다.
+- **마이그레이션용 임시 컨테이너는 Traefik에서 숨깁니다**(`docker compose run --rm --label traefik.enable=false`, 온프레미스도 같음).
+  숨기지 않으면 임시 컨테이너가 앱의 Traefik 라벨을 물려받아 같은 서비스의 두 번째 서버로 등록되고, 사라진 뒤 설정이 갱신되기 전까지
+  배포 직후 첫 요청에 502가 한 번 납니다(실제 호스트에서 재현했고 고친 뒤 3번 연속 0회).
 
 ## Terraform 실행기 (`terraform_runner`)
 
@@ -256,6 +259,83 @@ EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_terraform_runner.py   --r
 `smoke_terraform_runner.py`는 변경 없음, 출력 변환, 중복 실행 거부, 틀린 계정 ID 거부, 비밀과 임시 파일 정리를 확인합니다.
 `apply`는 실제 계정에서 이 실행기로 해 본 적이 없습니다(`plan`과 `output`만).
 
+## 이미지 빌더 (`image_builder`)
+
+서비스 서버의 로컬 도커에서 `<앱 이름>:<커밋 SHA>` 이미지를 빌드합니다. 서비스(A)가 PR이 머지된 커밋의 소스를 서비스 서버의
+로컬 폴더로 준비해서 부르고, 어댑터의 `deploy`가 이 이미지를 `docker save | ssh docker load`로 호스트에 보냅니다(레지스트리 없음).
+`Dockerfile`은 B가 만들어 레포에 넣어 둔 것을 씁니다.
+
+```python
+from pathlib import Path
+from anyship_adapters.image_builder import BuildError, ImageBuilder
+
+builder = ImageBuilder()
+try:
+    built = builder.build(Path("/path/to/merged/source"), "todo", "a1a1a1a", log)  # BuiltImage(image="todo:a1a1a1a", image_id="sha256:...")
+    builder.prune("todo", keep=5)  # 앱마다 최근 5개만 남기고 오래된 이미지를 지운다(서비스 서버 디스크 보호)
+except BuildError as exc:
+    exc.error  # AdapterError(code, message, hint, retryable)
+    exc.tail   # 비밀을 가린 마지막 출력 15줄
+```
+
+**지키는 것**
+
+- 원본 폴더를 건드리지 않고 **임시 복사본에서 빌드**합니다. `.git`과 `.env*`는 어느 깊이에서도 복사하지 않고(레포의 `.dockerignore`에 기대지 않음),
+  심볼릭 링크는 따라가지 않고 링크 그대로 둡니다. 복사본이 200MB를 넘으면 거부합니다(제외된 파일은 크기에 세지 않음).
+- 도커 프로세스에는 서비스 서버의 AWS 환경과 토큰을 넘기지 않고 입력을 기다리지 못하게 합니다.
+- 이미지는 `linux/amd64`로 고정하고 빌드 뒤에 아키텍처를 확인합니다.
+- 같은 (앱, SHA)는 동시에 빌드하지 않고, 제한 시간(기본 10분)이 지나거나 취소되면 도커 클라이언트를 종료합니다.
+- `Dockerfile` 경로에 `..`나 절대 경로를 허용하지 않고, `Dockerfile`이 링크이거나 소스 밖을 가리키면 거부합니다.
+
+**오류 코드** (`exc.error.code`)
+
+| 코드 | 언제 | 재시도 |
+|---|---|---|
+| `invalid_build_input` | 앱 이름, SHA, 소스 폴더, `Dockerfile` 경로가 올바르지 않음 | 아니요 |
+| `build_context_too_large` | 소스가 200MB를 넘음 | 아니요 |
+| `docker_not_found` | 서비스 서버에 `docker`가 없음 | 아니요 |
+| `docker_unavailable` | 도커 데몬에 연결할 수 없음(실행 중인지, 사용자가 `docker` 그룹인지) | 예 |
+| `docker_build_failed` | 빌드가 실패했거나 빌드한 이미지를 확인할 수 없음. `exc.tail`에 마지막 출력 | 아니요 |
+| `wrong_architecture` | 이미지가 `amd64`가 아님 | 아니요 |
+| `build_in_progress` | 같은 (앱, SHA)를 이미 빌드 중 | 예 |
+| `build_timeout` | 제한 시간 초과로 종료 | 예 |
+
+**알려진 위험(수용한 것)**
+
+- 이 빌드는 사용자 레포의 `Dockerfile`(임의의 `RUN` 명령)을 **서비스 서버에서** 실행합니다. 서비스 서버의 IAM 역할은 사용자 계정 AssumeRole 권한을 가집니다.
+  **샘플 레포에만 쓰는 전제**이고, 격리된 빌드 환경은 확장 항목입니다.
+- 서버에서 확인한 것: 빌드 중 `RUN` 단계는 **인스턴스 메타데이터(IAM 자격 증명)에 닿지 못합니다**(IMDSv2 필수, 홉 제한 1).
+- 서버에서 확인한 것: 빌드 컨테이너는 서비스 포트(HTTPS 프록시용으로 `docker0` 주소에 바인딩한 `172.17.0.1:8000`)에 **닿습니다**.
+  서비스 API는 로그인이 필요해서 당장 영향은 작지만, 인증이 필요 없는 엔드포인트(`/api/health`, `/api/config`, `/api/auth/github/start`)는 도달할 수 있습니다.
+  빌드 전용 네트워크나 방화벽 규칙은 후속 과제입니다.
+
+**시간** (서비스 서버 `t3.medium` 실측, 베이스 이미지를 미리 받아 둔 상태)
+
+| 작업 | 시간 |
+|---|---|
+| B의 변환본(todo) 빌드, 콜드 | 약 8.4초 |
+| 같은 소스를 다시 빌드(레이어 캐시) | 약 0.3초(같은 이미지 ID) |
+| 베이스 이미지를 처음 받는 빌드 | 측정하지 않음 |
+| 변환본을 `AwsAlwaysOnAdapter.deploy`로 AWS 호스트에 배포(이미지 전송, 앱 DB 준비, 기동, 마이그레이션, 헬스체크) | 약 9~10초 |
+
+**시험**
+
+```bash
+python -m pytest infra/adapters        # 가짜 도커 기반 단위 테스트 + 진짜 하위 프로세스 1건
+
+# 서비스 서버에서(진짜 도커). AWS에는 아무것도 하지 않는다
+python -u infra/adapters/scripts/smoke_image_builder.py
+
+# 서비스 서버에서. B의 변환본을 빌드하고 AWS 호스트에 배포했다가 destroy한다
+EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_sample_deploy.py   --role-arn <역할 ARN> --state-bucket <StateBucketName> --staging
+```
+
+`smoke_image_builder.py`는 `.git`·`.env*`가 이미지에 없음(B의 `.dockerignore`를 지우고도), `amd64`, 빌드 중 메타데이터 차단, `prune`을 확인합니다.
+`smoke_sample_deploy.py`는 변환본이 `/healthz` 200, DB 읽기와 쓰기까지 동작하는지, `destroy` 뒤 앱 DB가 남아 이어지는지를 확인합니다.
+
+**B의 변환본에 대해 알아 둘 점**: 변환본은 서버 시작 때 DB를 초기화하지 않고 `python -m app.migrate`로 분리했으며, 이 마이그레이션은 시드 데이터를 넣지 않습니다.
+그래서 배포된 샘플은 빈 목록으로 시작합니다.
+
 ## 오류 코드 (현재)
 
 mock이 내는 코드이고, 실제 어댑터가 생기면 더 늘어납니다
@@ -318,6 +398,7 @@ python -m pytest infra/adapters
 - 공용 기반을 첫 배포 때 만드는 `ensure_foundation`(`terraform_runner` 위에 얹는 어댑터 메서드), `*.aws` DNS 자동화
 - `terraform_runner`로 `apply`(약 20분)와 실시간 진행 로그를 실제 계정에서 시험(지금은 `plan`과 `output`만 확인)
 - Lambda 세트(`aws-serverless`)
+- 격리된 빌드 환경(지금은 서비스 서버에서 사용자 `Dockerfile`을 실행하므로 샘플 레포에만 쓸 것), 빌드 컨테이너가 서비스 포트에 닿는 것 막기
 - 앱의 비밀을 Secrets Manager에 보관(현재는 호스트의 `app.env`). 호스트 교체에도 비밀을 유지하고, 사용자 입력 비밀을
   재배포마다 다시 넘기지 않아도 되게 하려면 필요
 - 환경별 SSH 키, 앱 삭제 때 앱 DB 삭제 같은 확장 항목
