@@ -1,0 +1,32 @@
+app: todo-scheduler
+source:
+  repo: samples/todo-scheduler
+  commit: REPLACE_WITH_DEMO_COMMIT
+build:
+  dockerfile: Dockerfile
+  runtime_hint: python3.12
+port: 8080
+healthcheck: /healthz
+ingress: public
+env:
+- name: SECRET_KEY
+  secret: true
+  generate: true
+- name: LOG_LEVEL
+  value: info
+backing_services:
+- type: postgres
+  bind_as: DATABASE_URL
+- type: object_storage
+  bind_as: STORAGE_URL
+workload:
+  type: always-on
+  scale_to_zero: false
+  max_request_seconds: 10
+  websocket: false
+processes:
+  web:
+    instances: 1
+release:
+  migrate: python -m app.migrate
+profile: dev

@@ -1,0 +1,55 @@
+{
+  "calls": [
+    {
+      "stage": "diagnose",
+      "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input_tokens": 3568,
+      "output_tokens": 1487,
+      "cost_usd": null,
+      "latency_s": 10.25213904195698
+    },
+    {
+      "stage": "recommend",
+      "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input_tokens": 431,
+      "output_tokens": 123,
+      "cost_usd": null,
+      "latency_s": 1.6156858330359682
+    }
+  ],
+  "stages": {
+    "diagnose": {
+      "calls": 1,
+      "input_tokens": 3568,
+      "output_tokens": 1487,
+      "cost_usd": null,
+      "known_cost_usd": 0.0,
+      "pricing_complete": false,
+      "unobserved_requests": 0,
+      "usage_complete": true
+    },
+    "recommend": {
+      "calls": 1,
+      "input_tokens": 431,
+      "output_tokens": 123,
+      "cost_usd": null,
+      "known_cost_usd": 0.0,
+      "pricing_complete": false,
+      "unobserved_requests": 0,
+      "usage_complete": true
+    }
+  },
+  "total": {
+    "calls": 2,
+    "input_tokens": 3999,
+    "output_tokens": 1610,
+    "cost_usd": null,
+    "known_cost_usd": 0.0,
+    "pricing_complete": false,
+    "unobserved_requests": 0,
+    "usage_complete": true
+  },
+  "execution_source": "current_run",
+  "historical": false,
+  "external_calls": null
+}

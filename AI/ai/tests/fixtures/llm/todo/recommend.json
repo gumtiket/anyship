@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "sample": "todo",
+  "stage": "recommend",
+  "origin": "BedrockClient",
+  "parameters": {
+    "inferenceConfig": {
+      "maxTokens": 4096,
+      "temperature": 0
+    }
+  },
+  "entries": [
+    {
+      "tier": "fast",
+      "prompt_hash": "cb15458aeacc88c2966cafeb889d250d832e94e205d304a852f6817a6bc68d8d",
+      "response_hash": "397c5e22bc0caebf71ce592d57eb842c70b285ae813d2bed930f309350405c0c",
+      "response": {
+        "text": "```json\n{\n  \"selected_set\": \"aws-serverless\",\n  \"text\": \"요청 기반 워크로드로 요청당 10초 이내에 처리되며 유휴 시간에 자동으로 스케일 다운되는 특성을 가지고 있습니다. 이러한 단기 요청 처리 패턴에 최적화된 구성입니다.\"\n}\n```",
+        "input_tokens": 431,
+        "output_tokens": 123,
+        "cost_usd": null,
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "latency_s": 1.6175815000315197,
+        "transport_attempts": 1,
+        "stop_reason": "end_turn",
+        "usage": {
+          "inputTokens": 431,
+          "outputTokens": 123,
+          "totalTokens": 554,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 0
+        }
+      }
+    }
+  ]
+}

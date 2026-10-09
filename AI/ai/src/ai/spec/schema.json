@@ -1,0 +1,386 @@
+{
+  "$defs": {
+    "BackingService": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "postgres",
+            "object_storage"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "bind_as": {
+          "enum": [
+            "DATABASE_URL",
+            "STORAGE_URL"
+          ],
+          "title": "Bind As",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "bind_as"
+      ],
+      "title": "BackingService",
+      "type": "object"
+    },
+    "Build": {
+      "additionalProperties": false,
+      "properties": {
+        "dockerfile": {
+          "const": "Dockerfile",
+          "default": "Dockerfile",
+          "title": "Dockerfile",
+          "type": "string"
+        },
+        "runtime_hint": {
+          "const": "python3.12",
+          "default": "python3.12",
+          "title": "Runtime Hint",
+          "type": "string"
+        }
+      },
+      "title": "Build",
+      "type": "object"
+    },
+    "Environment": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ]
+          },
+          "if": {
+            "properties": {
+              "secret": {
+                "const": true
+              }
+            },
+            "required": [
+              "secret"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "generate": {
+                "const": true
+              }
+            },
+            "required": [
+              "generate"
+            ]
+          },
+          "then": {
+            "properties": {
+              "secret": {
+                "const": true
+              }
+            },
+            "required": [
+              "secret"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "name": {
+                "pattern": "_URL$"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "generate": {
+                "const": false
+              }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "name": {
+          "maxLength": 128,
+          "not": {
+            "anyOf": [
+              {
+                "enum": [
+                  "BASH_ENV",
+                  "CDPATH",
+                  "ENV",
+                  "HOME",
+                  "LAMBDA_RUNTIME_API",
+                  "LAMBDA_RUNTIME_DIR",
+                  "LAMBDA_TASK_ROOT",
+                  "LD_LIBRARY_PATH",
+                  "LD_PRELOAD",
+                  "NODE_OPTIONS",
+                  "PATH",
+                  "PORT",
+                  "PYTHONHOME",
+                  "PYTHONPATH",
+                  "PYTHONSTARTUP",
+                  "RUBYOPT",
+                  "SHELLOPTS",
+                  "_HANDLER",
+                  "_X_AMZN_TRACE_ID"
+                ]
+              },
+              {
+                "pattern": "^(AWS_|DOCKER_|LAMBDA_)"
+              }
+            ]
+          },
+          "pattern": "^[A-Z][A-Z0-9_]+$",
+          "title": "Name",
+          "type": "string"
+        },
+        "secret": {
+          "default": false,
+          "title": "Secret",
+          "type": "boolean"
+        },
+        "generate": {
+          "default": false,
+          "title": "Generate",
+          "type": "boolean"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "not": {
+            "pattern": "[\\r\\n\\x00]",
+            "type": "string"
+          },
+          "title": "Value"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "Environment",
+      "type": "object"
+    },
+    "Processes": {
+      "additionalProperties": false,
+      "properties": {
+        "web": {
+          "$ref": "#/$defs/Web"
+        }
+      },
+      "title": "Processes",
+      "type": "object"
+    },
+    "Release": {
+      "additionalProperties": false,
+      "properties": {
+        "migrate": {
+          "title": "Migrate",
+          "type": "string"
+        }
+      },
+      "required": [
+        "migrate"
+      ],
+      "title": "Release",
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "title": "Repo",
+          "type": "string"
+        },
+        "commit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Commit"
+        }
+      },
+      "required": [
+        "repo"
+      ],
+      "title": "Source",
+      "type": "object"
+    },
+    "Web": {
+      "additionalProperties": false,
+      "properties": {
+        "instances": {
+          "const": 1,
+          "default": 1,
+          "title": "Instances",
+          "type": "integer"
+        }
+      },
+      "title": "Web",
+      "type": "object"
+    },
+    "Workload": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "request-driven",
+            "always-on"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "scale_to_zero": {
+          "title": "Scale To Zero",
+          "type": "boolean"
+        },
+        "max_request_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "title": "Max Request Seconds",
+          "type": "integer"
+        },
+        "websocket": {
+          "title": "Websocket",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "scale_to_zero",
+        "max_request_seconds",
+        "websocket"
+      ],
+      "title": "Workload",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "app": {
+      "pattern": "^[a-z][a-z0-9-]{1,29}[a-z0-9]$",
+      "title": "App",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/Source"
+    },
+    "build": {
+      "$ref": "#/$defs/Build"
+    },
+    "port": {
+      "const": 8080,
+      "default": 8080,
+      "title": "Port",
+      "type": "integer"
+    },
+    "healthcheck": {
+      "const": "/healthz",
+      "default": "/healthz",
+      "title": "Healthcheck",
+      "type": "string"
+    },
+    "ingress": {
+      "const": "public",
+      "default": "public",
+      "title": "Ingress",
+      "type": "string"
+    },
+    "env": {
+      "items": {
+        "$ref": "#/$defs/Environment"
+      },
+      "title": "Env",
+      "type": "array"
+    },
+    "backing_services": {
+      "items": {
+        "$ref": "#/$defs/BackingService"
+      },
+      "not": {
+        "contains": {
+          "properties": {
+            "type": {
+              "const": "object_storage"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      },
+      "title": "Backing Services",
+      "type": "array"
+    },
+    "workload": {
+      "$ref": "#/$defs/Workload"
+    },
+    "processes": {
+      "$ref": "#/$defs/Processes"
+    },
+    "release": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Release"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "profile": {
+      "default": "dev",
+      "enum": [
+        "dev",
+        "prod"
+      ],
+      "title": "Profile",
+      "type": "string"
+    }
+  },
+  "required": [
+    "app",
+    "source",
+    "env",
+    "backing_services",
+    "workload"
+  ],
+  "title": "DeploySpec",
+  "type": "object"
+}

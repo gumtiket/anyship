@@ -1,0 +1,899 @@
+{
+  "format_version": 1,
+  "sample": "todo-scheduler",
+  "code_hash": "9c7fa2393dfbbed3be5fe05a7d89779520ba28f1001b53bd195ff20bfc5d1a53",
+  "engine_hash": "c15ccb08e1ade310919988accf41eb32de2bbc696259a6a3da1f6c4eb96cf7a3",
+  "settings": {
+    "target_env": "aws",
+    "commit": null,
+    "source_repo": "sample://todo-scheduler",
+    "profile": "dev",
+    "image_reference": null,
+    "tfvars_overrides": {},
+    "cost_assumptions": null,
+    "compare_original": true,
+    "app_name": null,
+    "max_request_seconds": 10
+  },
+  "out_hashes": {
+    "diagnosis.json": "e65b0fff4f5f418813666fc88f23f8e43fb509bfb2c85a633896e1c27e716327",
+    "changes.diff": "8409b0cbd5cddb8d366064eb1c2f22da28b6565b34f67485624b1b225032a1f4",
+    "Dockerfile": "6e8eb3df1849e89b0490123dd3902f32461dbbfb250f688ff991242e776ad108",
+    "deploy-spec.yaml": "bfee448f53c1b228e0736e8ae949de9eb53e0b725aa65f4ff6cd5b618942428a",
+    "recommendation.json": "c89bc93b8c4e494cade337fc4822725ffad0e9b21cf60a6934e738fc28ab03af",
+    "gate-report.json": "c0268cfff69ec9d6fa78ffc1bb60a8131f4d3639b61cae7d6cbf5e995fc3e77f",
+    "cost.json": "59cca55723852900c5ba1956acfbce4e9a84de8ff2c3b158445af6b0ca39d60f"
+  },
+  "result": {
+    "status": "diagnosed",
+    "diagnosis": {
+      "status": "completed",
+      "support_grade": "supported",
+      "violations": [
+        {
+          "id": "sqlite_usage:app/db.py:6",
+          "factor": 6,
+          "rule": "sqlite_usage",
+          "file": "app/db.py",
+          "line": 6,
+          "evidence": "SQLite DB URL을 코드/설정에서 발견했습니다. 값은 생략합니다.",
+          "severity": "warning",
+          "auto_fixable": false,
+          "change_class": "risky",
+          "confidence": "confirmed",
+          "source": "rule",
+          "description": "SQLite 데이터베이스 URL이 코드에 하드코딩되어 있습니다. 파일 기반 DB는 다중 인스턴스 환경에서 동시성 문제를 야기할 수 있습니다.",
+          "impact": "클라우드 환경 배포 시 읽기 전용 파일시스템에서 DB 파일 생성 실패, 다중 Pod 환경에서 데이터 일관성 문제 발생 가능"
+        },
+        {
+          "id": "hardcoded_secret:app/main.py:16",
+          "factor": 3,
+          "rule": "hardcoded_secret",
+          "file": "app/main.py",
+          "line": 16,
+          "evidence": "인증 정보 이름의 변수에 리터럴을 대입합니다. 값은 [REDACTED]입니다.",
+          "severity": "warning",
+          "auto_fixable": true,
+          "change_class": "safe",
+          "confidence": "confirmed",
+          "source": "rule",
+          "description": "인증 정보(SECRET_KEY)가 코드에 리터럴로 하드코딩되어 있습니다.",
+          "impact": "소스 코드 노출 시 인증 정보 유출, 환경별 설정 분리 불가능"
+        },
+        {
+          "id": "file_log:app/main.py:31",
+          "factor": 11,
+          "rule": "file_log",
+          "file": "app/main.py",
+          "line": 31,
+          "evidence": "파일 로그 핸들러/filename 설정을 발견했습니다.",
+          "severity": "warning",
+          "auto_fixable": true,
+          "change_class": "safe",
+          "confidence": "confirmed",
+          "source": "rule",
+          "description": "로그를 로컬 파일(app.log)로 기록하도록 설정되어 있습니다.",
+          "impact": "읽기 전용 파일시스템 환경에서 로그 파일 생성 실패, 컨테이너 재시작 시 로그 손실"
+        },
+        {
+          "id": "local_file_write:app/main.py:135",
+          "factor": 6,
+          "rule": "local_file_write",
+          "file": "app/main.py",
+          "line": 135,
+          "evidence": "파일 쓰기 메서드 호출. 영속성/저장 위치는 추가 검토가 필요합니다.",
+          "severity": "warning",
+          "auto_fixable": false,
+          "change_class": "risky",
+          "confidence": "needs_review",
+          "source": "rule",
+          "description": "export_todos 엔드포인트에서 로컬 파일시스템에 JSON 파일을 직접 쓰고 있습니다.",
+          "impact": "읽기 전용 파일시스템 환경에서 파일 쓰기 실패, 다중 인스턴스 환경에서 데이터 동기화 문제"
+        },
+        {
+          "id": "fixed_port:app/main.py:143",
+          "factor": 7,
+          "rule": "fixed_port",
+          "file": "app/main.py",
+          "line": 143,
+          "evidence": "uvicorn 시작 포트를 정수 리터럴로 지정합니다.",
+          "severity": "warning",
+          "auto_fixable": true,
+          "change_class": "safe",
+          "confidence": "confirmed",
+          "source": "rule",
+          "description": "uvicorn 서버 포트가 정수 리터럴(8000)로 고정되어 있습니다.",
+          "impact": "환경변수를 통한 포트 설정 불가능, 다중 인스턴스 실행 시 포트 충돌 가능성"
+        },
+        {
+          "id": "unpinned_dependency:requirements.txt:1",
+          "factor": 2,
+          "rule": "unpinned_dependency",
+          "file": "requirements.txt",
+          "line": 1,
+          "evidence": "이 선언 파일에서 4개 의존성의 정확한 버전 고정이 미확인입니다.",
+          "severity": "warning",
+          "auto_fixable": false,
+          "change_class": "safe",
+          "confidence": "confirmed",
+          "source": "rule",
+          "description": "requirements.txt에서 일부 의존성의 정확한 버전이 고정되지 않았습니다.",
+          "impact": "재설치 시 다른 버전의 패키지가 설치될 수 있어 예측 불가능한 동작 발생 가능"
+        }
+      ],
+      "signals": [
+        {
+          "name": "scheduler",
+          "file": "app/main.py",
+          "line": 8,
+          "evidence": "스케줄러/작업 라이브러리 import. 실제 실행 위치는 검토가 필요합니다."
+        }
+      ],
+      "warnings": [
+        {
+          "code": "rule_assessment_scope",
+          "message": "ok는 현재 규칙에서 위반을 찾지 못했다는 뜻입니다. 전체 준수나 실행 안전성을 보장하지 않습니다."
+        },
+        {
+          "code": "llm_candidate_rejected",
+          "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+        },
+        {
+          "code": "llm_candidate_rejected",
+          "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+        },
+        {
+          "code": "llm_candidate_rejected",
+          "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+        },
+        {
+          "code": "llm_candidate_rejected",
+          "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
+        },
+        {
+          "code": "data_migration_unsupported",
+          "message": "기존 데이터는 자동으로 이전되지 않는다. 데이터 이전 필요(미지원)"
+        },
+        {
+          "code": "file_storage_change_deferred",
+          "message": "영속 파일 저장 전환은 승인 필요이며 /tmp로 자동 이동하지 않았습니다."
+        },
+        {
+          "code": "dependency_version_unknown",
+          "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+        },
+        {
+          "code": "spec_llm_fallback",
+          "message": "LLM 제안 검증 실패로 고정 템플릿/규칙 기본값을 사용했습니다."
+        }
+      ],
+      "framework": {
+        "support_grade": "supported",
+        "framework": "fastapi",
+        "entrypoint": "app.main:app",
+        "reason": "FastAPI 전역 앱 진입점을 정적으로 확인했습니다."
+      },
+      "factor_reviews": [
+        {
+          "factor": 1,
+          "principle": "코드베이스",
+          "owner": "구조",
+          "status": "n/a"
+        },
+        {
+          "factor": 2,
+          "principle": "의존성",
+          "owner": "AI 진단",
+          "status": "violation"
+        },
+        {
+          "factor": 3,
+          "principle": "설정",
+          "owner": "AI 변환 + 어댑터",
+          "status": "violation"
+        },
+        {
+          "factor": 4,
+          "principle": "외부 자원",
+          "owner": "AI 변환 + 어댑터",
+          "status": "violation"
+        },
+        {
+          "factor": 5,
+          "principle": "빌드·릴리스·실행 분리",
+          "owner": "서비스 + 어댑터",
+          "status": "n/a"
+        },
+        {
+          "factor": 6,
+          "principle": "프로세스(무상태)",
+          "owner": "AI 진단",
+          "status": "violation"
+        },
+        {
+          "factor": 7,
+          "principle": "포트 바인딩",
+          "owner": "AI 변환 + 어댑터",
+          "status": "violation"
+        },
+        {
+          "factor": 8,
+          "principle": "동시성",
+          "owner": "어댑터",
+          "status": "n/a"
+        },
+        {
+          "factor": 9,
+          "principle": "폐기 가능성",
+          "owner": "어댑터",
+          "status": "n/a"
+        },
+        {
+          "factor": 10,
+          "principle": "개발·운영 일치",
+          "owner": "구조",
+          "status": "n/a"
+        },
+        {
+          "factor": 11,
+          "principle": "로그",
+          "owner": "AI 변환 + 어댑터",
+          "status": "violation"
+        },
+        {
+          "factor": 12,
+          "principle": "관리 프로세스",
+          "owner": "어댑터",
+          "status": "n/a"
+        }
+      ],
+      "enrichment_status": "completed",
+      "transformation": {
+        "status": "partial",
+        "changed_files": [
+          ".dockerignore",
+          "app/db.py",
+          "app/main.py",
+          "app/migrate.py",
+          "requirements.txt"
+        ],
+        "addressed_ids": [
+          "file_log:app/main.py:31",
+          "fixed_port:app/main.py:143",
+          "hardcoded_secret:app/main.py:16",
+          "sqlite_usage:app/db.py:6"
+        ],
+        "deferred_ids": [
+          "local_file_write:app/main.py:135",
+          "unpinned_dependency:requirements.txt:1"
+        ],
+        "env_vars": [
+          {
+            "name": "DATABASE_URL",
+            "secret": true,
+            "required": true,
+            "default": null,
+            "generate": false
+          },
+          {
+            "name": "LOG_LEVEL",
+            "secret": false,
+            "required": false,
+            "default": "INFO",
+            "generate": false
+          },
+          {
+            "name": "PORT",
+            "secret": false,
+            "required": false,
+            "default": "8080",
+            "generate": false
+          },
+          {
+            "name": "SECRET_KEY",
+            "secret": true,
+            "required": true,
+            "default": null,
+            "generate": true
+          }
+        ],
+        "migrate_command": "python -m app.migrate",
+        "sample_name": "todo-scheduler",
+        "needs_approval": true,
+        "patch_valid": true,
+        "compile_passed": true,
+        "llm_attempts": 0,
+        "warnings": [
+          {
+            "code": "data_migration_unsupported",
+            "message": "기존 데이터는 자동으로 이전되지 않는다. 데이터 이전 필요(미지원)"
+          },
+          {
+            "code": "file_storage_change_deferred",
+            "message": "영속 파일 저장 전환은 승인 필요이며 /tmp로 자동 이동하지 않았습니다."
+          },
+          {
+            "code": "dependency_version_unknown",
+            "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+          }
+        ]
+      }
+    },
+    "recommendation": {
+      "status": "completed",
+      "set": "aws-always-on",
+      "rationale": "app/main.py의 스케줄러 라이브러리 import가 감지되었으며, 워크로드 설정에서 scale_to_zero가 false로 지정되어 있습니다. 이는 지속적으로 실행되어야 하는 항상 켜진 상태의 애플리케이션 패턴을 나타냅니다.",
+      "needs_approval": true,
+      "rule_fired": "scheduler",
+      "rationale_source": "llm",
+      "signals": [
+        {
+          "name": "scheduler",
+          "file": "app/main.py",
+          "line": 8,
+          "evidence": "스케줄러/작업 라이브러리 import. 실제 실행 위치는 검토가 필요합니다."
+        }
+      ],
+      "estimated_monthly_cost": 28.55,
+      "assumptions": [
+        "임시 추정치: 단가 미확인, C 확정 전. 실제 AWS 요금이나 청구 견적이 아닙니다.",
+        "리전 가정: ap-northeast-2",
+        "월 요청 수 가정: 100000",
+        "상시 가동 시간 가정: 월 730시간",
+        "프리티어·크레딧·할인 적용 제외",
+        "통화 USD, 환율 변환 미적용",
+        "요청당 평균 실행 시간 가정: 0.2초 (실측/최대 시간 아님)",
+        "저장 용량 가정: 20GB, 메모리 입력: 512MB",
+        "데이터 전송·NAT·백업·로그·세금·환율·DB 고가용성·하드웨어 구입비는 계산하지 않음",
+        "서버리스는 소형 단일 DB 가정; 상시 컨테이너는 DB도 동일 서버에서 실행하는 가정",
+        "host: 0.035 USD / 서버 시간 — 단가 미확인",
+        "storage: 0.15 USD / GB-month — 단가 미확인",
+        "이미지 식별자 미제공: A가 실제 빌드된 이미지 태그/digest를 확정해야 함"
+      ],
+      "tfvars": {
+        "port": 8080,
+        "memory_mb": 512,
+        "instances": 1
+      },
+      "needs_confirmation": [
+        "tfvars_schema",
+        "cost_table",
+        "env_policy",
+        "app_reserved_names"
+      ],
+      "warnings": [
+        {
+          "code": "data_migration_unsupported",
+          "message": "기존 데이터는 자동으로 이전되지 않는다. 데이터 이전 필요(미지원)"
+        },
+        {
+          "code": "file_storage_change_deferred",
+          "message": "영속 파일 저장 전환은 승인 필요이며 /tmp로 자동 이동하지 않았습니다."
+        },
+        {
+          "code": "dependency_version_unknown",
+          "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+        },
+        {
+          "code": "provisional_infra_contract",
+          "message": "확인 필요(C 확정 전): tfvars 스키마·단가를 실제 인프라에 바로 적용하지 마세요."
+        },
+        {
+          "code": "spec_llm_fallback",
+          "message": "LLM 제안 검증 실패로 고정 템플릿/규칙 기본값을 사용했습니다."
+        }
+      ]
+    },
+    "gate_report": {
+      "status": "passed",
+      "reason": "샘플 시작·임시 Postgres CRUD 검증",
+      "runner": "docker",
+      "transformed": {
+        "status": "passed",
+        "steps": [
+          {
+            "name": "preflight",
+            "status": "passed",
+            "duration_s": 0.7411961670150049,
+            "log": "Docker/helpers 준비 확인"
+          },
+          {
+            "name": "build",
+            "status": "passed",
+            "duration_s": 0.9025594589766115,
+            "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.4s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.4s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.83kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 3/7] WORKDIR /app\n#8 CACHED\n\n#9 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#9 CACHED\n\n#10 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#10 CACHED\n\n#11 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#11 CACHED\n\n#12 [stage-0 4/7] COPY requirements*.txt ./\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:8c70461c8f1e08bb7ea44cf02e9a374f384c127849ac364a885c22be393b5d83 done\n#14 exporting config sha256:2c3a1e2f8456392a504bea83278d833b5e09a49e07edcff64eda98010cd76295 done\n#14 exporting attestation manifest sha256:188dbde4e29204278706af7b905d620276554ca18802457855ba7c87854703a3 0.0s done\n#14 exporting manifest list sha256:2e5bdb186a58ca2b7038e3eab3413ccd70eee762f5203f5b6480c94ffc772bb7 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec 0.2s done\n#14 DONE 0.3s"
+          },
+          {
+            "name": "network",
+            "status": "passed",
+            "duration_s": 0.019821833004243672,
+            "log": "internal network"
+          },
+          {
+            "name": "postgres",
+            "status": "passed",
+            "duration_s": 0.14717095898231491,
+            "log": "bronze-gate-4257390a3c8d-db"
+          },
+          {
+            "name": "postgres_ready",
+            "status": "passed",
+            "duration_s": 1.458145584037993,
+            "log": "bronze-gate-4257390a3c8d-db:5432 - accepting connections"
+          },
+          {
+            "name": "migrate",
+            "status": "passed",
+            "duration_s": 0.5893291659886017,
+            "log": ""
+          },
+          {
+            "name": "app_start",
+            "status": "passed",
+            "duration_s": 0.09646983299171552,
+            "log": "bronze-gate-4257390a3c8d-app"
+          },
+          {
+            "name": "healthcheck",
+            "status": "passed",
+            "duration_s": 1.471176208986435,
+            "log": "{\"status\":\"ok\"}"
+          },
+          {
+            "name": "postgres_crud",
+            "status": "passed",
+            "duration_s": 3.140521416964475,
+            "log": "임시 Postgres 저장·조회·앱 재기동 후 조회·수정·삭제 확인"
+          }
+        ],
+        "logs": "INFO:     172.21.0.4:39056 - \"GET /healthz HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39064 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39070 - \"PUT /todos/1 HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39072 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:43862 - \"DELETE /todos/1 HTTP/1.1\" 204 No Content\nINFO:     172.21.0.4:43872 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     Started server process [1]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)",
+        "matched_patterns": [],
+        "cleanup_errors": [],
+        "image_tag": "bronze-ai-gate:gate-264b4ee47c8a2f422b311aec"
+      },
+      "original": {
+        "status": "failed",
+        "steps": [
+          {
+            "name": "original_build",
+            "status": "passed",
+            "duration_s": 0.7617351249791682,
+            "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.3s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.38kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#8 CACHED\n\n#9 [stage-0 3/7] WORKDIR /app\n#9 CACHED\n\n#10 [stage-0 4/7] COPY requirements*.txt ./\n#10 CACHED\n\n#11 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#11 CACHED\n\n#12 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:76a8d7dbe752ee42511f4ec2376f7de42eef88b81c20f89ce3eeab7f489026d4 done\n#14 exporting config sha256:ceb60c73871a8897d0851523edcc3f469c36920d6ce45651b6d689d3f4387a24 done\n#14 exporting attestation manifest sha256:330f176616a6c96e26eceae9bc6271ff5ba7d6e1f96226da2948c15b225585e9 0.0s done\n#14 exporting manifest list sha256:59ba16771ef3fc4164c6c48b5ba8051e42f5f3cc746d3ea879ae763fb7cff702 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 0.2s done\n#14 DONE 0.2s"
+          },
+          {
+            "name": "original_start",
+            "status": "passed",
+            "duration_s": 0.17318416596390307,
+            "log": "bronze-gate-4257390a3c8d-original"
+          }
+        ],
+        "logs": "INFO:     Started server process [1]\nINFO:     Waiting for application startup.\nERROR:    Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/starlette/routing.py\", line 654, in lifespan\n    async with self.lifespan_context(app) as maybe_state:\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/contextlib.py\", line 210, in __aenter__\n    return await anext(self.gen)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/main.py\", line 31, in lifespan\n    handler = logging.FileHandler(\"app.log\")\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1231, in __init__\n    StreamHandler.__init__(self, self._open())\n                                 ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1263, in _open\n    return open_func(self.baseFilename, self.mode,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/app/app.log'\n\nERROR:    Application startup failed. Exiting.",
+        "matched_patterns": [
+          "Read-only file system",
+          "OSError: [Errno 30]"
+        ],
+        "cleanup_errors": [],
+        "image_tag": "bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406"
+      },
+      "pr_eligible": false,
+      "scope": "sample_startup_and_postgres_crud",
+      "attempts": [
+        {
+          "number": 1,
+          "status": "passed",
+          "reason": "샘플 시작·임시 Postgres CRUD 검증",
+          "transformed": {
+            "status": "passed",
+            "steps": [
+              {
+                "name": "preflight",
+                "status": "passed",
+                "duration_s": 0.7411961670150049,
+                "log": "Docker/helpers 준비 확인"
+              },
+              {
+                "name": "build",
+                "status": "passed",
+                "duration_s": 0.9025594589766115,
+                "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.4s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.4s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.83kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 3/7] WORKDIR /app\n#8 CACHED\n\n#9 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#9 CACHED\n\n#10 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#10 CACHED\n\n#11 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#11 CACHED\n\n#12 [stage-0 4/7] COPY requirements*.txt ./\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:8c70461c8f1e08bb7ea44cf02e9a374f384c127849ac364a885c22be393b5d83 done\n#14 exporting config sha256:2c3a1e2f8456392a504bea83278d833b5e09a49e07edcff64eda98010cd76295 done\n#14 exporting attestation manifest sha256:188dbde4e29204278706af7b905d620276554ca18802457855ba7c87854703a3 0.0s done\n#14 exporting manifest list sha256:2e5bdb186a58ca2b7038e3eab3413ccd70eee762f5203f5b6480c94ffc772bb7 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec 0.2s done\n#14 DONE 0.3s"
+              },
+              {
+                "name": "network",
+                "status": "passed",
+                "duration_s": 0.019821833004243672,
+                "log": "internal network"
+              },
+              {
+                "name": "postgres",
+                "status": "passed",
+                "duration_s": 0.14717095898231491,
+                "log": "bronze-gate-4257390a3c8d-db"
+              },
+              {
+                "name": "postgres_ready",
+                "status": "passed",
+                "duration_s": 1.458145584037993,
+                "log": "bronze-gate-4257390a3c8d-db:5432 - accepting connections"
+              },
+              {
+                "name": "migrate",
+                "status": "passed",
+                "duration_s": 0.5893291659886017,
+                "log": ""
+              },
+              {
+                "name": "app_start",
+                "status": "passed",
+                "duration_s": 0.09646983299171552,
+                "log": "bronze-gate-4257390a3c8d-app"
+              },
+              {
+                "name": "healthcheck",
+                "status": "passed",
+                "duration_s": 1.471176208986435,
+                "log": "{\"status\":\"ok\"}"
+              },
+              {
+                "name": "postgres_crud",
+                "status": "passed",
+                "duration_s": 3.140521416964475,
+                "log": "임시 Postgres 저장·조회·앱 재기동 후 조회·수정·삭제 확인"
+              }
+            ],
+            "logs": "INFO:     172.21.0.4:39056 - \"GET /healthz HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39064 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39070 - \"PUT /todos/1 HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39072 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:43862 - \"DELETE /todos/1 HTTP/1.1\" 204 No Content\nINFO:     172.21.0.4:43872 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     Started server process [1]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)",
+            "matched_patterns": [],
+            "cleanup_errors": [],
+            "image_tag": "bronze-ai-gate:gate-264b4ee47c8a2f422b311aec"
+          },
+          "original": {
+            "status": "failed",
+            "steps": [
+              {
+                "name": "original_build",
+                "status": "passed",
+                "duration_s": 0.7617351249791682,
+                "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.3s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.38kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#8 CACHED\n\n#9 [stage-0 3/7] WORKDIR /app\n#9 CACHED\n\n#10 [stage-0 4/7] COPY requirements*.txt ./\n#10 CACHED\n\n#11 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#11 CACHED\n\n#12 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:76a8d7dbe752ee42511f4ec2376f7de42eef88b81c20f89ce3eeab7f489026d4 done\n#14 exporting config sha256:ceb60c73871a8897d0851523edcc3f469c36920d6ce45651b6d689d3f4387a24 done\n#14 exporting attestation manifest sha256:330f176616a6c96e26eceae9bc6271ff5ba7d6e1f96226da2948c15b225585e9 0.0s done\n#14 exporting manifest list sha256:59ba16771ef3fc4164c6c48b5ba8051e42f5f3cc746d3ea879ae763fb7cff702 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 0.2s done\n#14 DONE 0.2s"
+              },
+              {
+                "name": "original_start",
+                "status": "passed",
+                "duration_s": 0.17318416596390307,
+                "log": "bronze-gate-4257390a3c8d-original"
+              }
+            ],
+            "logs": "INFO:     Started server process [1]\nINFO:     Waiting for application startup.\nERROR:    Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/starlette/routing.py\", line 654, in lifespan\n    async with self.lifespan_context(app) as maybe_state:\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/contextlib.py\", line 210, in __aenter__\n    return await anext(self.gen)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/main.py\", line 31, in lifespan\n    handler = logging.FileHandler(\"app.log\")\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1231, in __init__\n    StreamHandler.__init__(self, self._open())\n                                 ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1263, in _open\n    return open_func(self.baseFilename, self.mode,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/app/app.log'\n\nERROR:    Application startup failed. Exiting.",
+            "matched_patterns": [
+              "Read-only file system",
+              "OSError: [Errno 30]"
+            ],
+            "cleanup_errors": [],
+            "image_tag": "bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406"
+          },
+          "repair_summary": null,
+          "repair_status": null
+        }
+      ],
+      "retry_stop_reason": null,
+      "execution_source": "current_run",
+      "historical_status": null
+    },
+    "cost": {
+      "calls": [
+        {
+          "stage": "diagnose",
+          "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "input_tokens": 3823,
+          "output_tokens": 1290,
+          "cost_usd": null,
+          "latency_s": 8.588625834032428
+        },
+        {
+          "stage": "recommend",
+          "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "input_tokens": 496,
+          "output_tokens": 140,
+          "cost_usd": null,
+          "latency_s": 1.4884606249979697
+        }
+      ],
+      "stages": {
+        "diagnose": {
+          "calls": 1,
+          "input_tokens": 3823,
+          "output_tokens": 1290,
+          "cost_usd": null,
+          "known_cost_usd": 0.0,
+          "pricing_complete": false,
+          "unobserved_requests": 0,
+          "usage_complete": true
+        },
+        "recommend": {
+          "calls": 1,
+          "input_tokens": 496,
+          "output_tokens": 140,
+          "cost_usd": null,
+          "known_cost_usd": 0.0,
+          "pricing_complete": false,
+          "unobserved_requests": 0,
+          "usage_complete": true
+        }
+      },
+      "total": {
+        "calls": 2,
+        "input_tokens": 4319,
+        "output_tokens": 1430,
+        "cost_usd": null,
+        "known_cost_usd": 0.0,
+        "pricing_complete": false,
+        "unobserved_requests": 0,
+        "usage_complete": true
+      },
+      "execution_source": "current_run",
+      "historical": false,
+      "external_calls": null
+    },
+    "output_files": {
+      "diagnosis.json": "diagnosis.json",
+      "changes.diff": "changes.diff",
+      "Dockerfile": "Dockerfile",
+      "deploy-spec.yaml": "deploy-spec.yaml",
+      "recommendation.json": "recommendation.json",
+      "gate-report.json": "gate-report.json",
+      "cost.json": "cost.json"
+    },
+    "transformation": {
+      "status": "partial",
+      "changed_files": [
+        ".dockerignore",
+        "app/db.py",
+        "app/main.py",
+        "app/migrate.py",
+        "requirements.txt"
+      ],
+      "addressed_ids": [
+        "file_log:app/main.py:31",
+        "fixed_port:app/main.py:143",
+        "hardcoded_secret:app/main.py:16",
+        "sqlite_usage:app/db.py:6"
+      ],
+      "deferred_ids": [
+        "local_file_write:app/main.py:135",
+        "unpinned_dependency:requirements.txt:1"
+      ],
+      "env_vars": [
+        {
+          "name": "DATABASE_URL",
+          "secret": true,
+          "required": true,
+          "default": null,
+          "generate": false
+        },
+        {
+          "name": "LOG_LEVEL",
+          "secret": false,
+          "required": false,
+          "default": "INFO",
+          "generate": false
+        },
+        {
+          "name": "PORT",
+          "secret": false,
+          "required": false,
+          "default": "8080",
+          "generate": false
+        },
+        {
+          "name": "SECRET_KEY",
+          "secret": true,
+          "required": true,
+          "default": null,
+          "generate": true
+        }
+      ],
+      "migrate_command": "python -m app.migrate",
+      "sample_name": "todo-scheduler",
+      "needs_approval": true,
+      "patch_valid": true,
+      "compile_passed": true,
+      "llm_attempts": 0,
+      "warnings": [
+        {
+          "code": "data_migration_unsupported",
+          "message": "기존 데이터는 자동으로 이전되지 않는다. 데이터 이전 필요(미지원)"
+        },
+        {
+          "code": "file_storage_change_deferred",
+          "message": "영속 파일 저장 전환은 승인 필요이며 /tmp로 자동 이동하지 않았습니다."
+        },
+        {
+          "code": "dependency_version_unknown",
+          "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+        }
+      ]
+    },
+    "deploy_spec": {
+      "app": "todo-scheduler",
+      "source": {
+        "repo": "sample://todo-scheduler",
+        "commit": null
+      },
+      "build": {
+        "dockerfile": "Dockerfile",
+        "runtime_hint": "python3.12"
+      },
+      "port": 8080,
+      "healthcheck": "/healthz",
+      "ingress": "public",
+      "env": [
+        {
+          "name": "LOG_LEVEL",
+          "secret": false,
+          "generate": false,
+          "value": "INFO"
+        },
+        {
+          "name": "SECRET_KEY",
+          "secret": true,
+          "generate": true,
+          "value": null
+        }
+      ],
+      "backing_services": [
+        {
+          "type": "postgres",
+          "bind_as": "DATABASE_URL"
+        }
+      ],
+      "workload": {
+        "type": "always-on",
+        "scale_to_zero": false,
+        "max_request_seconds": 10,
+        "websocket": false
+      },
+      "processes": {
+        "web": {
+          "instances": 1
+        }
+      },
+      "release": {
+        "migrate": "python -m app.migrate"
+      },
+      "profile": "dev"
+    },
+    "build_context": null,
+    "packaging_warnings": [
+      {
+        "code": "spec_llm_fallback",
+        "message": "LLM 제안 검증 실패로 고정 템플릿/규칙 기본값을 사용했습니다."
+      }
+    ],
+    "timings_s": {
+      "scan": 0.00986508303321898,
+      "diagnosis": 8.595941499981564,
+      "analysis": 8.605806583014783,
+      "transform": 0.10631108400411904,
+      "packaging": 0.0360785000375472,
+      "recommendation": 1.4911155000445433,
+      "gate": 10.62593412498245,
+      "total": 20.872629416000564
+    },
+    "execution_source": "current_run"
+  },
+  "events": [
+    {
+      "stage": "분석 중",
+      "message": "P5: 규칙 진단·변경안·패키징·추천 시작 — 원본 코드·DB는 수정하지 않습니다."
+    },
+    {
+      "stage": "분석 중",
+      "message": "diagnosis 시작"
+    },
+    {
+      "stage": "분석 중",
+      "message": "diagnosis 완료: 8.596초"
+    },
+    {
+      "stage": "분석 중",
+      "message": "transform 시작"
+    },
+    {
+      "stage": "분석 중",
+      "message": "transform 완료: 0.106초"
+    },
+    {
+      "stage": "분석 중",
+      "message": "packaging 시작"
+    },
+    {
+      "stage": "분석 중",
+      "message": "packaging 완료: 0.036초"
+    },
+    {
+      "stage": "분석 중",
+      "message": "recommendation 시작"
+    },
+    {
+      "stage": "분석 중",
+      "message": "recommendation 완료: 1.491초"
+    },
+    {
+      "stage": "검증 중",
+      "message": "gate 시작"
+    },
+    {
+      "stage": "검증 중",
+      "message": "게이트 시도 1/3"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: preflight"
+    },
+    {
+      "stage": "빌드 중",
+      "message": "P4: build"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: network"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: postgres"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: postgres_ready"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: migrate"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: app_start"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: healthcheck"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: postgres_crud"
+    },
+    {
+      "stage": "빌드 중",
+      "message": "P4: original_build"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4: original_start"
+    },
+    {
+      "stage": "검증 중",
+      "message": "P4 결과: passed; 현재 PR 승인 가능 표시는 false입니다."
+    },
+    {
+      "stage": "검증 중",
+      "message": "gate 완료: 10.626초"
+    },
+    {
+      "stage": "분석 중",
+      "message": "Dockerfile lint·배포 명세 스키마 검증 완료. 게이트 결과: passed."
+    },
+    {
+      "stage": "분석 중",
+      "message": "LLM 요청별 기록·규칙 비교 저장: 2개 요청. 실제 사용 모델은 llm-trace.json에서 확인하세요."
+    },
+    {
+      "stage": "분석 중",
+      "message": "규칙 진단 완료: supported, 위반 6개, 신호 1개, 변경 파일 5개. 출력 7종 기록."
+    },
+    {
+      "stage": "분석 중",
+      "message": "전체 완료: 20.873초"
+    }
+  ],
+  "provenance": "Actual Bedrock responses and Docker sample gate; historical result",
+  "llm_execution_source": "current_run",
+  "recorded_llm_usage": null
+}

@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "name": "SQLite 파일 DB URL 하드코딩",
+    "file": "app/db.py",
+    "rule": "sqlite_usage"
+  },
+  {
+    "id": 2,
+    "name": "인증 시크릿 리터럴",
+    "file": "app/main.py",
+    "rule": "hardcoded_secret"
+  },
+  {
+    "id": 3,
+    "name": "파일 로그",
+    "file": "app/main.py",
+    "rule": "file_log"
+  },
+  {
+    "id": 4,
+    "name": "고정 uvicorn 포트",
+    "file": "app/main.py",
+    "rule": "fixed_port"
+  },
+  {
+    "id": 5,
+    "name": "의존성 버전 미고정",
+    "file": "requirements.txt",
+    "rule": "unpinned_dependency"
+  },
+  {
+    "id": 6,
+    "name": "로컬 내보내기 파일 저장",
+    "file": "app/main.py",
+    "rule": "local_file_write"
+  }
+]

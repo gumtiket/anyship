@@ -1,0 +1,8 @@
+[
+  {"id": 1, "name": "application.yml에 jdbc:sqlite:memo.db 하드코딩", "file": "application.yml", "rule": "hardcoded_db_url"},
+  {"id": 2, "name": "코드에 날씨 API 키 하드코딩", "file": "WeatherService.java", "rule": "hardcoded_secret"},
+  {"id": 3, "name": "server.port: 8080 고정", "file": "application.yml", "rule": "fixed_port"},
+  {"id": 4, "name": "업로드 이미지를 로컬 uploads/ 에 저장", "file": "MemoController.java", "rule": "local_file_write"},
+  {"id": 5, "name": "로그를 파일로만 기록", "file": "logback-spring.xml", "rule": "file_log"},
+  {"id": 6, "name": "SQLite 전용 @Query (datetime('now'))", "file": "MemoRepository.java", "rule": "sqlite_syntax"}
+]

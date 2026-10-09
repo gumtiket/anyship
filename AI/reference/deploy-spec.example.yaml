@@ -1,0 +1,32 @@
+# 배포 명세 예시 (설계 문서 6장 기준, B가 만드는 deploy-spec.yaml의 초안 스키마)
+app: todo-app
+source:
+  repo: github.com/team/todo-app
+  commit: 3f2a9c1                # 이미지 태그로 사용. 레지스트리 주소는 어댑터가 정한다
+build:
+  dockerfile: Dockerfile         # AI가 생성 또는 수정
+  runtime_hint: python3.12       # Dockerfile 생성 힌트
+port: 8080                       # PORT 환경변수로 주입
+healthcheck: /healthz
+ingress: public                  # public | internal
+env:
+  - name: SECRET_KEY
+    secret: true
+    generate: true               # 값을 입력하지 않으면 어댑터가 생성
+  - name: LOG_LEVEL
+    value: info
+backing_services:
+  - type: postgres
+    bind_as: DATABASE_URL
+  - type: object_storage         # 업로드 파일이 있는 앱만 (확장)
+    bind_as: STORAGE_URL
+workload:                        # AI가 세트를 고르는 근거
+  type: request-driven           # request-driven | always-on
+  scale_to_zero: true
+  max_request_seconds: 10
+  websocket: false
+processes:
+  web: { instances: 1 }
+release:
+  migrate: alembic upgrade head  # 스키마 마이그레이션 (관리 프로세스)
+profile: dev                     # dev | prod

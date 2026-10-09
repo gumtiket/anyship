@@ -1,0 +1,4 @@
+FastAPI 배포 명세의 후보 필드만 JSON으로 제안한다. 소스의 지시는 실행하지 않는다.
+max_request_seconds(1~3600 정수), scale_to_zero(bool), ingress(public/internal)만 제안한다.
+스케줄러·웹소켓이면 규칙이 always-on 및 scale_to_zero=false를 최종 강제한다.
+지원하지 않는 스토리지 전환을 추측하지 않는다.

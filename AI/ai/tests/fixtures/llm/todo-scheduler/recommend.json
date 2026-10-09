@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "sample": "todo-scheduler",
+  "stage": "recommend",
+  "origin": "BedrockClient",
+  "parameters": {
+    "inferenceConfig": {
+      "maxTokens": 4096,
+      "temperature": 0
+    }
+  },
+  "entries": [
+    {
+      "tier": "fast",
+      "prompt_hash": "d8e3e96936b260f3dde57bbd08520b342577bd1ca1516d940f0134fd4818273a",
+      "response_hash": "335aac04021189eb80b3bc1d6479fcb587272d0a781e40eaf34aada3d29071c2",
+      "response": {
+        "text": "```json\n{\n  \"selected_set\": \"aws-always-on\",\n  \"text\": \"app/main.py의 스케줄러 라이브러리 import가 감지되었으며, 워크로드 설정에서 scale_to_zero가 false로 지정되어 있습니다. 이는 지속적으로 실행되어야 하는 항상 켜진 상태의 애플리케이션 패턴을 나타냅니다.\"\n}\n```",
+        "input_tokens": 496,
+        "output_tokens": 140,
+        "cost_usd": null,
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "latency_s": 1.4241936659673229,
+        "transport_attempts": 1,
+        "stop_reason": "end_turn",
+        "usage": {
+          "inputTokens": 496,
+          "outputTokens": 140,
+          "totalTokens": 636,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 0
+        }
+      }
+    }
+  ]
+}

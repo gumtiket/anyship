@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "sample": "todo",
+  "stage": "diagnose",
+  "origin": "BedrockClient",
+  "parameters": {
+    "inferenceConfig": {
+      "maxTokens": 4096,
+      "temperature": 0
+    }
+  },
+  "entries": [
+    {
+      "tier": "fast",
+      "prompt_hash": "9c3e2d4ddb2cec7af2dc2dc3e6d13cc441de95000923c55e9bc647caec12238a",
+      "response_hash": "7f37db5ae1dec8a9e5f322b2163dd1647bcb5699cb14d833d9e7f7e6a084d776",
+      "response": {
+        "text": "```json\n{\n  \"explanations\": [\n    {\n      \"id\": \"sqlite_usage:app/db.py:6\",\n      \"description\": \"SQLite 데이터베이스 URL이 코드에 하드코딩되어 있습니다. 파일 기반 DB는 단일 인스턴스 환경에만 적합하며, 클라우드 환경에서는 확장성과 동시성 문제가 발생합니다.\",\n      \"impact\": \"다중 인스턴스 배포 시 데이터 일관성 문제, 읽기 전용 파일시스템에서 DB 생성 실패, 영속성 보장 불가\",\n      \"factor\": 6\n    },\n    {\n      \"id\": \"hardcoded_secret:app/main.py:15\",\n      \"description\": \"인증 정보(SECRET_KEY)가 소스 코드에 리터럴로 하드코딩되어 있습니다. 환경별 설정 분리가 필요합니다.\",\n      \"impact\": \"시크릿 정보 노출, 환경별 설정 관리 불가, 보안 취약점\",\n      \"factor\": 3\n    },\n    {\n      \"id\": \"file_log:app/main.py:21\",\n      \"description\": \"로그를 로컬 파일(app.log)로 기록하도록 설정되어 있습니다. 읽기 전용 파일시스템이나 임시 저장소 환경에서는 파일 생성이 실패합니다.\",\n      \"impact\": \"읽기 전용 실행 환경에서 애플리케이션 시작 실패, 로그 손실, 컨테이너 환경 비호환\",\n      \"factor\": 11\n    },\n    {\n      \"id\": \"local_file_write:app/main.py:119\",\n      \"description\": \"로컬 파일시스템에 직접 쓰기(./data/todos.json)를 수행합니다. 영속성 저장소가 아닌 임시 저장소에 쓰면 데이터 손실 위험이 있습니다.\",\n      \"impact\": \"컨테이너 재시작 시 데이터 손실, 다중 인스턴스 환경에서 데이터 불일치, 클라우드 환경 비호환\",\n      \"factor\": 6\n    },\n    {\n      \"id\": \"fixed_port:app/main.py:127\",\n      \"description\": \"Uvicorn 서버 포트가 정수 리터럴(8000)로 고정되어 있습니다. 환경별 포트 설정 주입이 불가능합니다.\",\n      \"impact\": \"환경 변수를 통한 포트 설정 불가, 다중 인스턴스 실행 시 포트 충돌, 배포 유연성 감소\",\n      \"factor\": 7\n    },\n    {\n      \"id\": \"unpinned_dependency:requirements.txt:1\",\n      \"description\": \"requirements.txt에서 일부 의존성의 정확한 버전이 고정되지 않았습니다. 재설치 시 다른 버전이 선택될 수 있어 재현성이 보장되지 않습니다.\",\n      \"impact\": \"빌드 재현성 불가, 예상치 못한 버전 업그레이드로 인한 호환성 문제, 보안 패치 미적용 위험\",\n      \"factor\": 2\n    }\n  ],\n  \"candidates\": [\n    {\n      \"factor\": 3,\n      \"file\": \"app/main.py\",\n      \"line\": 15,\n      \"evidence\": \"SECRET_KEY = \\\"[REDACTED]\\\"\",\n      \"description\": \"SECRET_KEY를 환경변수로 변경: os.getenv('SECRET_KEY') 또는 설정 관리 라이브러리 사용 권장\"\n    },\n    {\n      \"factor\": 11,\n      \"file\": \"app/main.py\",\n      \"line\": 21,\n      \"evidence\": \"handler = logging.FileHandler(\\\"app.log\\\")\",\n      \"description\": \"파일 로그 대신 표준 출력(StreamHandler) 또는 구조화된 로깅(JSON 로그)으로 변경하여 클라우드 환경 호환성 확보\"\n    },\n    {\n      \"factor\": 6,\n      \"file\": \"app/main.py\",\n      \"line\": 119,\n      \"evidence\": \"destination = Path(\\\"./data/todos.json\\\")\",\n      \"description\": \"로컬 파일 쓰기 대신 데이터베이스 저장 또는 클라우드 스토리지(S3, GCS 등) 사용으로 변경\"\n    },\n    {\n      \"factor\": 7,\n      \"file\": \"app/main.py\",\n      \"line\": 127,\n      \"evidence\": \"uvicorn.run(\\\"app.main:app\\\", host=\\\"127.0.0.1\\\", port=8000)\",\n      \"description\": \"포트를 환경변수로 변경: port=int(os.getenv('PORT', '8000')), host를 0.0.0.0으로 변경하여 외부 접근 허용\"\n    }\n  ]\n}\n```",
+        "input_tokens": 3568,
+        "output_tokens": 1487,
+        "cost_usd": null,
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "latency_s": 10.445651250018273,
+        "transport_attempts": 1,
+        "stop_reason": "end_turn",
+        "usage": {
+          "inputTokens": 3568,
+          "outputTokens": 1487,
+          "totalTokens": 5055,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 0
+        }
+      }
+    }
+  ]
+}

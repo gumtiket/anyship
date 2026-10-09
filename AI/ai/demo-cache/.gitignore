@@ -1,0 +1,10 @@
+# Keep only the reviewed seven-file demo payload, even under a parent out/ ignore rule.
+!*/out/
+*/out/*
+!*/out/diagnosis.json
+!*/out/changes.diff
+!*/out/Dockerfile
+!*/out/deploy-spec.yaml
+!*/out/recommendation.json
+!*/out/gate-report.json
+!*/out/cost.json

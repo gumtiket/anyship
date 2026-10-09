@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bronze-ai"
+version = "0.1.0"
+description = "Team Bronze AI analysis CLI"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2,<3", "PyYAML>=6,<7", "boto3>=1.34,<2", "pathspec>=0.12,<2", "packaging>=24", "jsonschema>=4.23,<5"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1", "fastapi>=0.115,<1", "SQLAlchemy>=2,<3", "uvicorn>=0.30,<1", "APScheduler>=3.11,<4", "httpx>=0.27,<1", "psycopg2-binary>=2.9,<3"]
+login = ["boto3[crt]>=1.43.109,<2"]
+samples = ["fastapi>=0.115,<1", "SQLAlchemy>=2,<3", "uvicorn>=0.30,<1", "APScheduler>=3.11,<4", "httpx>=0.27,<1"]
+
+[project.scripts]
+bronze-ai = "ai.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ai = ["prompts/*.txt", "sample-manifests.json", "spec/schema.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["bedrock: live paid AWS calls (opt-in)", "docker: live Docker tests (opt-in)"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

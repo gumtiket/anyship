@@ -1,0 +1,36 @@
+{
+  "format_version": 1,
+  "sample": "todo-scheduler",
+  "stage": "diagnose",
+  "origin": "BedrockClient",
+  "parameters": {
+    "inferenceConfig": {
+      "maxTokens": 4096,
+      "temperature": 0
+    }
+  },
+  "entries": [
+    {
+      "tier": "fast",
+      "prompt_hash": "2e46a792ecd19d8ddd858a6652c1560ae8ae5742b7cc9b2e5d9861c7daed93cc",
+      "response_hash": "b625e0d593d1ee5dda59730bab162377a41315f2e622fc4e564245a259878cb7",
+      "response": {
+        "text": "```json\n{\n  \"explanations\": [\n    {\n      \"id\": \"sqlite_usage:app/db.py:6\",\n      \"description\": \"SQLite 데이터베이스 URL이 코드에 하드코딩되어 있습니다. 파일 기반 DB는 다중 인스턴스 환경에서 동시성 문제를 야기할 수 있습니다.\",\n      \"impact\": \"클라우드 환경 배포 시 읽기 전용 파일시스템에서 DB 파일 생성 실패, 다중 Pod 환경에서 데이터 일관성 문제 발생 가능\",\n      \"factor\": 6\n    },\n    {\n      \"id\": \"hardcoded_secret:app/main.py:16\",\n      \"description\": \"인증 정보(SECRET_KEY)가 코드에 리터럴로 하드코딩되어 있습니다.\",\n      \"impact\": \"소스 코드 노출 시 인증 정보 유출, 환경별 설정 분리 불가능\",\n      \"factor\": 3\n    },\n    {\n      \"id\": \"file_log:app/main.py:31\",\n      \"description\": \"로그를 로컬 파일(app.log)로 기록하도록 설정되어 있습니다.\",\n      \"impact\": \"읽기 전용 파일시스템 환경에서 로그 파일 생성 실패, 컨테이너 재시작 시 로그 손실\",\n      \"factor\": 11\n    },\n    {\n      \"id\": \"local_file_write:app/main.py:135\",\n      \"description\": \"export_todos 엔드포인트에서 로컬 파일시스템에 JSON 파일을 직접 쓰고 있습니다.\",\n      \"impact\": \"읽기 전용 파일시스템 환경에서 파일 쓰기 실패, 다중 인스턴스 환경에서 데이터 동기화 문제\",\n      \"factor\": 6\n    },\n    {\n      \"id\": \"fixed_port:app/main.py:143\",\n      \"description\": \"uvicorn 서버 포트가 정수 리터럴(8000)로 고정되어 있습니다.\",\n      \"impact\": \"환경변수를 통한 포트 설정 불가능, 다중 인스턴스 실행 시 포트 충돌 가능성\",\n      \"factor\": 7\n    },\n    {\n      \"id\": \"unpinned_dependency:requirements.txt:1\",\n      \"description\": \"requirements.txt에서 일부 의존성의 정확한 버전이 고정되지 않았습니다.\",\n      \"impact\": \"재설치 시 다른 버전의 패키지가 설치될 수 있어 예측 불가능한 동작 발생 가능\",\n      \"factor\": 2\n    }\n  ],\n  \"candidates\": [\n    {\n      \"factor\": 3,\n      \"file\": \"app/main.py\",\n      \"line\": 16,\n      \"evidence\": \"SECRET_KEY = \\\"[REDACTED]\\\"\",\n      \"description\": \"SECRET_KEY를 환경변수로 변경: os.getenv('SECRET_KEY')를 사용하여 런타임에 주입받도록 수정\"\n    },\n    {\n      \"factor\": 11,\n      \"file\": \"app/main.py\",\n      \"line\": 31,\n      \"evidence\": \"handler = logging.FileHandler(\\\"app.log\\\")\",\n      \"description\": \"파일 로깅을 표준 출력으로 변경: logging.StreamHandler()를 사용하거나 환경변수로 로그 대상 설정\"\n    },\n    {\n      \"factor\": 6,\n      \"file\": \"app/main.py\",\n      \"line\": 135,\n      \"evidence\": \"destination = Path(\\\"./data/todos.json\\\") / destination.write_text(...)\",\n      \"description\": \"로컬 파일 쓰기를 클라우드 스토리지(S3, GCS 등) 또는 데이터베이스 저장으로 변경\"\n    },\n    {\n      \"factor\": 7,\n      \"file\": \"app/main.py\",\n      \"line\": 143,\n      \"evidence\": \"uvicorn.run(\\\"app.main:app\\\", host=\\\"127.0.0.1\\\", port=8000)\",\n      \"description\": \"포트를 환경변수로 변경: port=int(os.getenv('PORT', '8000'))로 수정하고 host도 0.0.0.0으로 변경\"\n    }\n  ]\n}\n```",
+        "input_tokens": 3823,
+        "output_tokens": 1290,
+        "cost_usd": null,
+        "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "latency_s": 8.69101958302781,
+        "transport_attempts": 1,
+        "stop_reason": "end_turn",
+        "usage": {
+          "inputTokens": 3823,
+          "outputTokens": 1290,
+          "totalTokens": 5113,
+          "cacheReadInputTokens": 0,
+          "cacheWriteInputTokens": 0
+        }
+      }
+    }
+  ]
+}
