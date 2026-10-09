@@ -39,3 +39,15 @@ override.tf.json
 terraform.rc
 
 # End of https://www.toptal.com/developers/gitignore/api/terraform
+
+### Python (infra/adapters) ###
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+### Server-side Compose settings (copied from .env.example on the server) ###
+.env
+!.env.example
