@@ -117,8 +117,12 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
 
 - `spec`은 배포 명세를 **딕셔너리**로 넘깁니다. 어댑터는 필드를 다시 검증합니다.
 - `secrets`는 `{"이름": "값"}` 딕셔너리입니다. **메모리에만 두고 서비스 DB, 로그에 남기지 마세요.**
-  어댑터가 환경의 비밀 저장소(AWS Secrets Manager, 서버의 `.env`)에 쓰고, 결과에는 **이름만** 남깁니다
-  (`details["secrets_stored"]`).
+  실제 어댑터(온프레미스, AWS)는 이 값을 서버의 비밀 파일(`app.env`, 소유자만 읽는 권한 600)에 쓰고, 앱 컨테이너의
+  환경변수로 주입합니다. 결과에는 **이름만** 남깁니다: 새로 생성한 비밀의 이름은 `details["generated"]`
+  (mock은 받은 비밀의 이름을 `details["secrets_stored"]`로 돌려줍니다).
+- 명세의 `generate: true` 비밀(예: `SECRET_KEY`)은 첫 배포에 어댑터가 만들고, 재배포 때는 서버의 값을 재사용합니다.
+  **사용자가 입력하는 비밀(`generate`가 아닌 것)은 이전 값을 재사용하지 않으므로, 재배포 때마다 `secrets`로 다시 넘겨야 합니다.**
+  빠지면 `missing_secret`으로 실패합니다.
 
 ### 로그 이벤트 (`LogEvent`)
 
@@ -169,6 +173,10 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
 
 - **공용 기반이 없으면** `host`, `db_address`, `db_secret_arn`이 비어 있고, `check`와 `deploy`는 `foundation_missing`으로 실패합니다.
   기반은 서비스가 `infra/user-account`로 먼저 만듭니다(실행 방법은 그 폴더의 README). 첫 배포 때 약 20분 걸립니다.
+- **앱의 비밀 보관**: MVP는 온프레미스와 같이 호스트의 `app.env`(권한 600)에 둡니다. MVP 문서는 "사용자 계정
+  Secrets Manager가 원본"이라고 했지만, 이번 범위에서는 구현하지 않기로 했습니다(후속 과제). 그래서 호스트를 교체하면
+  생성한 비밀(`SECRET_KEY`)이 새로 만들어져 로그인 세션이 끊기고, 사용자가 입력한 비밀은 다시 넣어야 합니다.
+  Secrets Manager에 있는 것은 RDS 마스터 비밀번호뿐입니다.
 - **마스터 비밀번호**는 서비스 서버가 사용자 역할로 Secrets Manager에서 읽어 SSH 표준입력으로만 호스트에 전달합니다.
   호스트에는 AWS 자격 증명이 없고, 비밀번호는 명령줄, 로그, 결과, 디스크에 남지 않습니다.
 - **`check`가 서비스의 `STSAdapter.check`와 다른 이유**: 서비스의 것은 환경 등록 때 한 번 하는 신뢰 정책 검증
@@ -238,5 +246,7 @@ python -m pytest infra/adapters
 - `aws-always-on` 어댑터 본체: `aws_access.py`(AssumeRole, 마스터 비밀번호 읽기)와 `compose.py`의 외부 DB 모드는 있고,
   앱 DB 생성(`rds_admin.py`)과 어댑터 본체는 구현 중(이슈 #36)
 - 공용 기반을 첫 배포 때 만드는 `ensure_foundation`(Terraform 실행기와 함께), `*.aws` DNS 자동화
+- 앱의 비밀을 Secrets Manager에 보관(현재는 호스트의 `app.env`). 호스트 교체에도 비밀을 유지하고, 사용자 입력 비밀을
+  재배포마다 다시 넘기지 않아도 되게 하려면 필요
 - 환경별 SSH 키, 앱 삭제 때 앱 DB 삭제 같은 확장 항목
 - 오류 코드 추가
