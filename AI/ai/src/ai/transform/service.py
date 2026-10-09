@@ -14,6 +14,7 @@ from ai.detectors.repo import aliases, qualified
 from ai.llm.base import LLMClient
 from ai.models import Diagnosis, EnvVar, OutputModel, TransformReport, Violation, WarningItem
 from ai.security import SourceMasker, credential_name
+from ai.spec.env_policy import allowed_name, allowed_value
 from ai.transform.patch import canonical_patch
 from ai.transform.scope import check_patch_scope, rebase_targets
 from ai.transform.templates import template_changes
@@ -50,6 +51,9 @@ def _failure_code(error: ValueError | RuntimeError | SyntaxError) -> str:
         "signals_changed",
         "framework_changed",
         "requested_violation_unresolved",
+        "environment_name_forbidden",
+        "environment_value_unsafe",
+        "environment_value_required",
         "git_timeout",
         "patch_scope_violation",
         "patch_target_not_found",
@@ -218,6 +222,7 @@ def _patch_candidate(
     *,
     targets: list[Violation] | None = None,
     masked_sources: dict[str, str] | None = None,
+    system_env: set[str] | None = None,
 ) -> dict[str, str]:
     if masker.contains_sensitive(diff):
         raise ValueError("sensitive_value_in_patch")
@@ -233,6 +238,20 @@ def _patch_candidate(
         workspace.apply(diff)
         candidate = workspace.read(set(before) | paths)
         _check_semantics(before, candidate, paths)
+        original_env = {e.name: e for e in env_vars(before, masker)}
+        for variable in env_vars(candidate, masker):
+            if original_env.get(variable.name) == variable:
+                continue
+            if variable.name not in (system_env or set()) and not allowed_name(variable.name):
+                raise ValueError("environment_name_forbidden")
+            if variable.default is not None and not allowed_value(variable.default):
+                raise ValueError("environment_value_unsafe")
+            if (
+                variable.name not in (system_env or set())
+                and not variable.secret
+                and variable.default is None
+            ):
+                raise ValueError("environment_value_required")
         view = RepoView(workspace.root)
         if SourceMasker(view).blocked_files - masker.blocked_files:
             raise ValueError("sensitive_literal_added")
@@ -270,13 +289,36 @@ def llm_patch(
         and v.file not in masker.blocked_files
         and v.file.endswith(".py")
     ]
+    blocked = set()
+    for file in {v.file for v in eligible}:
+        tree = ast.parse(before[file])
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            names = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if any(isinstance(n, ast.Name) and not allowed_name(n.id.upper()) for n in names):
+                blocked.update(
+                    v.id
+                    for v in eligible
+                    if v.file == file
+                    and node.lineno <= v.line <= node.end_lineno
+                    and v.rule in {"hardcoded_secret", "hardcoded_db_url"}
+                )
+    eligible = [v for v in eligible if v.id not in blocked]
+    policy_warnings = [
+        WarningItem(
+            code="environment_name_forbidden",
+            message=f"{identifier}: C 예약 이름의 환경변수 추출을 보류했습니다.",
+        )
+        for identifier in sorted(blocked)
+    ]
     if not eligible or llm is None:
-        return before, [], 0, []
+        return before, [], 0, policy_warnings
     prompt = files("ai").joinpath("prompts/transform.txt").read_text(encoding="utf-8")
     attempts = 0
     error_code = None
     seen = set()
-    warnings = []
+    warnings = policy_warnings
 
     def attempt(
         current: dict[str, str], selected: list[Violation], retry: str | None
@@ -326,6 +368,7 @@ def llm_patch(
             masker,
             targets=scoped_targets,
             masked_sources=masked_sources,
+            system_env={"PORT"} if any(v.rule == "fixed_port" for v in selected) else set(),
         )
         with Workspace(candidate) as workspace:
             remaining = {(v.rule, v.file) for v in detect(RepoView(workspace.root))}
@@ -344,6 +387,13 @@ def llm_patch(
             return candidate, addressed, attempts, warnings
         except (ValueError, RuntimeError, SyntaxError) as error:
             failure = _failure_code(error)
+            if failure.startswith("environment_"):
+                warning = WarningItem(
+                    code=failure,
+                    message="C의 환경변수 이름/값 규칙에 맞지 않는 변경안을 보류했습니다.",
+                )
+                if warning not in warnings:
+                    warnings.append(warning)
             if failure == "repeated_patch":
                 break
             error_code = failure

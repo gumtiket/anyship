@@ -129,6 +129,7 @@
                 "enum": [
                   "BASH_ENV",
                   "CDPATH",
+                  "DATABASE_URL",
                   "ENV",
                   "HOME",
                   "LAMBDA_RUNTIME_API",
@@ -142,14 +143,16 @@
                   "PYTHONHOME",
                   "PYTHONPATH",
                   "PYTHONSTARTUP",
+                  "REDIS_URL",
                   "RUBYOPT",
                   "SHELLOPTS",
+                  "STORAGE_URL",
                   "_HANDLER",
                   "_X_AMZN_TRACE_ID"
                 ]
               },
               {
-                "pattern": "^(AWS_|DOCKER_|LAMBDA_)"
+                "pattern": "^(AWS_|DOCKER_|LAMBDA_|COMPOSE_|TRAEFIK_|LD_|POSTGRES)"
               }
             ]
           },
@@ -170,7 +173,7 @@
         "value": {
           "anyOf": [
             {
-              "maxLength": 4096,
+              "maxLength": 1024,
               "type": "string"
             },
             {
@@ -179,7 +182,7 @@
           ],
           "default": null,
           "not": {
-            "pattern": "[\\r\\n\\x00]",
+            "pattern": "[\\r\\n\\x00']",
             "type": "string"
           },
           "title": "Value"
@@ -205,6 +208,12 @@
       "additionalProperties": false,
       "properties": {
         "migrate": {
+          "maxLength": 500,
+          "minLength": 1,
+          "not": {
+            "pattern": "[\\r\\n\\x00]"
+          },
+          "pattern": "^[^\\r\\n\\x00]*$",
           "title": "Migrate",
           "type": "string"
         }

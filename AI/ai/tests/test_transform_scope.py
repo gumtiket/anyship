@@ -166,8 +166,16 @@ def test_log_fix_cannot_add_helper_rebind_or_new_assignment(tmp_path, addition):
         ),
     ],
 )
-def test_requested_safe_edits_inside_functions_are_accepted(tmp_path, before, after, rule):
-    (result, ids, attempts, warnings), _, targets = patch(tmp_path, before, after, rule)
+def test_requested_safe_edits_preserve_scope_and_follow_c_env_policy(tmp_path, before, after, rule):
+    (result, ids, attempts, warnings), fake, targets = patch(tmp_path, before, after, rule)
+    check_patch_scope({"main.py": before}, {"main.py": after}, {"main.py"}, targets)
+    if rule == "hardcoded_db_url":
+        # Structurally valid extraction is still deferred: C owns DATABASE_URL
+        # binding, so the LLM may not introduce it as an ordinary app setting.
+        assert result["main.py"] == before and not ids
+        assert "environment_name_forbidden" in {warning.code for warning in warnings}
+        assert "environment_name_forbidden" in fake.calls[1].user
+        return
     assert result["main.py"] == after
     assert ids == [v.id for v in targets] and attempts == 1 and not warnings
 
@@ -202,7 +210,9 @@ def test_db_url_extraction_preserves_engine_options(tmp_path):
     )
     after = before.replace('"postgresql://db.invalid/demo"', 'os.environ["DATABASE_URL"]')
     after = after.replace("pool_pre_ping=True", "pool_pre_ping=False")
-    (result, ids, _, warnings), _, _ = patch(tmp_path, before, after, "hardcoded_db_url")
+    (result, ids, _, warnings), _, targets = patch(tmp_path, before, after, "hardcoded_db_url")
+    with pytest.raises(ValueError, match="patch_scope_violation"):
+        check_patch_scope({"main.py": before}, {"main.py": after}, {"main.py"}, targets)
     assert result["main.py"] == before and not ids and warnings
 
 

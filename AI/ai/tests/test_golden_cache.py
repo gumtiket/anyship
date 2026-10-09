@@ -125,6 +125,13 @@ def test_record_rejects_non_sample_and_output_inside_original(tmp_path):
 def test_recorded_golden_pipeline_and_same_input_dockerfile_bytes(tmp_path, name, expected):
     repo = ROOT / "samples" / name
     expected_core = json.loads((ROOT / "ai/tests/fixtures/golden" / f"{name}.json").read_text())
+    # C's 2026-10-10 contract retires per-app container tfvars. Keep the
+    # historical golden files unchanged and compare all other fields exactly.
+    if expected == "aws-always-on":
+        expected_core["tfvars"] = {}
+        expected_core["needs_confirmation"] = [
+            key for key in expected_core["needs_confirmation"] if key != "tfvars_schema"
+        ]
     outputs = []
     for number in range(2):
         replay = ReplayClient(repo)

@@ -49,25 +49,39 @@ def recommend(
     cost_assumptions: CostAssumptions | None = None,
 ) -> Recommendation:
     selected, fired = select_set(target_env, spec, diagnosis)
-    variables, replaced = make_tfvars(
-        selected, spec, image_reference=image_reference, overrides=tfvars_overrides
-    )
-    memory = variables.memory_limit_mb
+    variables = None
+    replaced = False
+    if selected == "aws-serverless":
+        variables, replaced = make_tfvars(
+            selected, spec, image_reference=image_reference, overrides=tfvars_overrides
+        )
+    memory = variables.memory_limit_mb if variables is not None else 512
     amount, assumptions = estimate_monthly(selected, memory_mb=memory, assumptions=cost_assumptions)
     rationale = (
         f"규칙 {fired}에 따라 {selected}를 선택했습니다. "
         "요청 시간은 후보 값이며 실제 동작·인프라 계약은 별도 확인해야 합니다."
     )
+    contract_note = (
+        "C Lambda 세트 미정의: tfvars는 기존 임시값이며 실제 적용 전 확인 필요"
+        if selected == "aws-serverless"
+        else "C: 앱별 tfvars 없음"
+    )
+    rationale += " " + contract_note
     rationale_source = "rule"
     warnings = list(transformation.warnings)
     warnings.append(
         WarningItem(
             code="provisional_infra_contract",
-            message=(
-                "확인 필요(C 확정 전): tfvars 스키마·단가를 실제 인프라에 바로 적용하지 마세요."
-            ),
+            message=("임시 추정치: 단가 미확정. " + contract_note),
         )
     )
+    if variables is None and tfvars_overrides:
+        warnings.append(
+            WarningItem(
+                code="app_tfvars_ignored",
+                message="C: 앱별 tfvars 없음. 전달된 앱별 override는 적용하지 않았습니다.",
+            )
+        )
     if replaced:
         warnings.append(
             WarningItem(
@@ -118,7 +132,7 @@ def recommend(
             )
             if not isinstance(response.parsed, SelectedRationale):
                 raise ValueError("rationale_invalid")
-            rationale = masker.text(response.parsed.text)
+            rationale = masker.text(response.parsed.text) + " " + contract_note
             rationale_source = "llm"
         except (ValueError, RuntimeError):
             warnings.append(
@@ -137,8 +151,11 @@ def recommend(
         needs_approval=transformation.needs_approval,
         estimated_monthly_cost=amount,
         assumptions=assumptions,
-        tfvars=variables.model_dump(mode="json", by_alias=True, exclude_none=True),
-        needs_confirmation=["tfvars_schema", "cost_table", "env_policy", "app_reserved_names"]
+        tfvars=variables.model_dump(mode="json", by_alias=True, exclude_none=True)
+        if variables is not None
+        else {},
+        needs_confirmation=(["tfvars_schema"] if variables is not None else [])
+        + ["cost_table", "env_policy", "app_reserved_names"]
         + sorted(
             {
                 w.code

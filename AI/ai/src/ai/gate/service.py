@@ -247,15 +247,17 @@ def run_gate(
             raise ValueError("trusted_sample_migration_required")
 
         def migrate() -> str:
+            # C uses compose run --rm web: a separate container with the same
+            # app image/environment, after app startup and before healthcheck.
             result = one_shot(
-                current.image_tag, "migrate", ["python", "-m", "app.migrate"], app_env
+                current.image_tag, "migrate", ["sh", "-c", "python -m app.migrate"], app_env
             )
             if result.code:
                 raise RunnerError("migration_failed\n" + result.output)
             return result.output
 
-        step("migrate", migrate)
         step("app_start", lambda: start(current.image_tag, "app", app_env, []))
+        step("migrate", migrate)
         step("healthcheck", healthy)
         step("postgres_crud", crud)
         current.logs = safe_log(runner.logs(app_name), sensitive)
