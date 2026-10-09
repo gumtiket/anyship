@@ -10,8 +10,8 @@ Compose를 쓰는 세트(온프레미스, aws-always-on)가 함께 쓰는 모듈
   web  앱 컨테이너. Traefik 네트워크와 앱 전용 내부 네트워크에 연결된다.
   db   Postgres 컨테이너(명세가 postgres를 요구할 때만). 앱 전용 내부 네트워크에만
        연결되고 호스트 포트로 열지 않는다. 데이터는 앱별 볼륨에 둔다.
-       (지금은 이 방식만 지원한다. EC2 세트처럼 외부 DB를 쓰는 경우는 해당 어댑터를
-       만들 때 추가한다.)
+       외부 DB(EC2 세트의 공유 RDS)를 쓰면 db 컨테이너를 만들지 않는다. 호출하는 쪽이
+       `database_url`을 넘기고, 이 주소는 app.env에만 들어간다.
 
 파일은 두 개로 나눈다. 같은 파일에 두면 DB 비밀번호가 앱의 환경변수로 새어 들어간다.
   .env      Compose 치환용(POSTGRES_PASSWORD)
@@ -30,6 +30,9 @@ POSTGRES_IMAGE = "postgres:16-alpine"
 DB_USER = "app"
 DB_NAME = "app"
 _DB_PASSWORD = re.compile(r"^[A-Za-z0-9]{16,128}$")
+# 외부 DB 주소: 앱 전용 계정(소문자·숫자·밑줄), 영숫자 비밀번호, RDS 주소, SSL 필수. 환경 파일에 그대로 쓰이므로 엄격하게 검사한다.
+_DATABASE_URL = re.compile(
+    r"^postgresql://[a-z][a-z0-9_]{0,62}:[A-Za-z0-9]{16,128}@[a-z0-9][a-z0-9.-]{0,252}:[0-9]{4,5}/[a-z][a-z0-9_]{0,62}\?sslmode=require$")
 # 소문자 DNS 이름(점으로 구분된 2개 이상의 라벨, 라벨은 63자 이하). Host(`...`) 규칙에 들어간다.
 _HOST = re.compile(r"^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
@@ -62,6 +65,7 @@ def render_stack(
     image_tag: str,
     secrets: Mapping[str, str] | None = None,
     previous_env: Mapping[str, str] | None = None,
+    database_url: str | None = None,
     new_token: Callable[[], str] = _new_token,
 ) -> RenderedStack:
     """명세를 파일로 바꾼다. 잘못된 입력은 SpecError(AdapterError 포함)를 던진다.
@@ -71,6 +75,8 @@ def render_stack(
     previous_env  서버에 이미 있는 .env와 app.env의 값. 생성한 비밀(SECRET_KEY,
                   POSTGRES_PASSWORD)을 매번 바꾸면 로그인 세션이 끊기고 DB에 접속할
                   수 없게 되므로, 있으면 그대로 재사용한다.
+    database_url  외부 DB 주소(EC2 세트의 공유 RDS). 주면 명세에 postgres가 있을 때 db 컨테이너 대신
+                  이 주소를 앱의 DATABASE_URL로 쓴다. 비밀번호가 들어 있어 app.env에만 쓴다.
     """
     if len(host) > 253 or not _HOST.match(host):
         raise reject("invalid_host", "앱의 공개 주소 형식이 올바르지 않습니다.",
@@ -111,8 +117,16 @@ def render_stack(
     if unused:
         warnings.append("명세에 없는 비밀 입력은 사용하지 않았습니다: " + ", ".join(unused))
 
+    external_db = parsed.postgres and database_url is not None
+    if external_db:
+        if not _DATABASE_URL.match(database_url):
+            raise reject("invalid_env_value", "DB 주소 형식이 올바르지 않습니다.")
+        app_lines.append(_env_line("DATABASE_URL", database_url))
+    elif database_url is not None:
+        warnings.append("명세에 postgres가 없어 DB 주소를 사용하지 않았습니다.")
+
     compose_env = ""
-    if parsed.postgres:
+    if parsed.postgres and not external_db:
         password = previous.get("POSTGRES_PASSWORD")
         if password:
             if not _DB_PASSWORD.match(password):
@@ -124,7 +138,8 @@ def render_stack(
         compose_env = _env_line("POSTGRES_PASSWORD", password) + "\n"
 
     return RenderedStack(
-        compose_yaml=_compose_yaml(parsed.app, image_tag, parsed.port, host, parsed.postgres),
+        compose_yaml=_compose_yaml(parsed.app, image_tag, parsed.port, host,
+                                   postgres=parsed.postgres and not external_db, internal_network=not external_db),
         compose_env=compose_env,
         app_env="".join(line + "\n" for line in app_lines),
         warnings=tuple(warnings),
@@ -132,7 +147,8 @@ def render_stack(
     )
 
 
-def _compose_yaml(app: str, image_tag: str, port: int, host: str, postgres: bool) -> str:
+def _compose_yaml(app: str, image_tag: str, port: int, host: str, *, postgres: bool,
+                  internal_network: bool = True) -> str:
     # 여기에 들어가는 값은 모두 검증된 형식(앱 이름, 태그, 포트, 호스트)이다.
     labels = [
         "traefik.enable=true",
@@ -164,7 +180,7 @@ def _compose_yaml(app: str, image_tag: str, port: int, host: str, postgres: bool
     lines += [
         "    networks:",
         "      - traefik",
-        "      - internal",
+        *(["      - internal"] if internal_network else []),
         "    labels:",
         *[f"      - {_quote(label)}" for label in labels],
         "    read_only: true",
@@ -201,13 +217,9 @@ def _compose_yaml(app: str, image_tag: str, port: int, host: str, postgres: bool
             "    mem_limit: 512m",
             "    pids_limit: 200",
         ]
-    lines += [
-        "networks:",
-        "  traefik:",
-        "    external: true",
-        "  internal:",
-        "    internal: true",  # 인터넷으로 나가는 길이 없는 앱 전용 네트워크
-    ]
+    lines += ["networks:", "  traefik:", "    external: true"]
+    if internal_network:  # 외부 DB를 쓰면 앱이 VPC의 RDS에 닿아야 하므로 막힌 네트워크를 만들지 않는다
+        lines += ["  internal:", "    internal: true"]  # 인터넷으로 나가는 길이 없는 앱 전용 네트워크
     if postgres:
         lines += ["volumes:", "  db-data: {}"]
     return "\n".join(lines) + "\n"

@@ -1,3 +1,2 @@
 -e ../infra/adapters
--e ../AI/ai
 -e .[web,test]

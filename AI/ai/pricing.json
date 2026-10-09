@@ -1,8 +1,60 @@
 {
-  "_comment": "Bedrock 요금 페이지 확인 후 채울 것. models 키에 실제 호출 model_id/추론 프로필 ID를 사용한다. 단위: USD / 1M tokens.",
-  "models": {},
+  "_comment": "단위: USD / 1M tokens. Anthropic 직접 API 정가만 등록. Bedrock/추론 프로필 ID의 미확정 단가는 null 유지.",
+  "models": {
+    "claude-opus-5-5": {
+      "input_usd_per_million": 4,
+      "output_usd_per_million": 20,
+      "cache_read_usd_per_million": 0.2,
+      "cache_write_5m_usd_per_million": 5.0,
+      "cache_write_1h_usd_per_million": 8
+    },
+    "claude-sonnet-5-5": {
+      "input_usd_per_million": 2,
+      "output_usd_per_million": 10,
+      "cache_read_usd_per_million": 0.1,
+      "cache_write_5m_usd_per_million": 2.5,
+      "cache_write_1h_usd_per_million": 4
+    },
+    "claude-haiku-5-5": {
+      "input_usd_per_million": 0.1,
+      "output_usd_per_million": 0.5,
+      "cache_read_usd_per_million": 0.01,
+      "cache_write_5m_usd_per_million": 0.125,
+      "cache_write_1h_usd_per_million": 0.2,
+      "long_prompt_threshold": 100000,
+      "long_input_usd_per_million": 0.5,
+      "long_output_usd_per_million": 2.5
+    },
+    "claude-sonnet-4-6": {
+      "input_usd_per_million": 3,
+      "output_usd_per_million": 15,
+      "cache_read_usd_per_million": 0.3,
+      "cache_write_5m_usd_per_million": 3.75,
+      "cache_write_1h_usd_per_million": 6
+    },
+    "claude-haiku-4-5": {
+      "input_usd_per_million": 1,
+      "output_usd_per_million": 5,
+      "cache_read_usd_per_million": 0.1,
+      "cache_write_5m_usd_per_million": 1.25,
+      "cache_write_1h_usd_per_million": 2
+    },
+    "claude-haiku-4-5-20251001": {
+      "input_usd_per_million": 1,
+      "output_usd_per_million": 5,
+      "cache_read_usd_per_million": 0.1,
+      "cache_write_5m_usd_per_million": 1.25,
+      "cache_write_1h_usd_per_million": 2
+    }
+  },
   "_template": {
     "input_usd_per_million": null,
     "output_usd_per_million": null
+  },
+  "_anthropic_source": {
+    "title": "Anthropic 공식 가격",
+    "url": "https://platform.claude.com/docs/en/about-claude/pricing",
+    "verified_on": "2026-10-09",
+    "scope": "standard, global, first-party; billing estimate, not invoice"
   }
 }
