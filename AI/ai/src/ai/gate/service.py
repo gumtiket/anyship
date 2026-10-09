@@ -247,8 +247,10 @@ def run_gate(
             raise ValueError("trusted_sample_migration_required")
 
         def migrate() -> str:
-            result = runner.exec(
-                app_name, ["python", "-m", "app.migrate"], timeout=min(timeout_s, 30)
+            # C uses compose run --rm web: a separate container with the same
+            # app image/environment, after app startup and before healthcheck.
+            result = one_shot(
+                current.image_tag, "migrate", ["sh", "-c", "python -m app.migrate"], app_env
             )
             if result.code:
                 raise RunnerError("migration_failed\n" + result.output)

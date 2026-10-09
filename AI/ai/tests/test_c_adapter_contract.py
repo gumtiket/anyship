@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 
 from ai.detectors import RepoView
-from ai.gate.runner import DockerCliRunner, FakeRunner
+from ai.gate.runner import FakeRunner
 from ai.models import Diagnosis, TransformReport
 from ai.pipeline import run_analysis
 from ai.security import SourceMasker
@@ -182,7 +182,7 @@ def test_transformed_database_url_preserves_ssl_query(tmp_path):
         result.build_context.cleanup()
 
 
-def test_gate_migrates_in_started_app_and_retains_security_flags(tmp_path):
+def test_gate_migrates_in_one_shot_app_container_and_retains_security_flags(tmp_path):
     fake = FakeRunner()
     result = run_analysis(
         ROOT / "samples/todo", out_dir=tmp_path / "out", runner=fake, log=lambda *_: None
@@ -190,10 +190,30 @@ def test_gate_migrates_in_started_app_and_retains_security_flags(tmp_path):
     try:
         steps = [s.name for s in result.gate_report.transformed.steps]
         assert steps.index("app_start") < steps.index("migrate") < steps.index("healthcheck")
-        assert len(fake.exec_commands) == 1
-        name, command = fake.exec_commands[0]
-        assert name.endswith("-app") and command == ["python", "-m", "app.migrate"]
-        assert not any("-migrate" in args for args in fake.commands)
+        migrations = [
+            args for args in fake.commands if args[args.index("--name") + 1].endswith("-migrate")
+        ]
+        assert len(migrations) == 1
+        migration = migrations[0]
+        migration_name = migration[migration.index("--name") + 1]
+        app_name = migration_name.removesuffix("-migrate") + "-app"
+        app = next(args for args in fake.commands if args[args.index("--name") + 1] == app_name)
+        assert migration[-4:] == [
+            result.gate_report.transformed.image_tag,
+            "sh",
+            "-c",
+            "python -m app.migrate",
+        ]
+        assert app[-1] == result.gate_report.transformed.image_tag
+        assert fake.envs[migration_name] == fake.envs[app_name]
+        assert migration[migration.index("--network") + 1] == app[app.index("--network") + 1]
+        assert fake.events.index(("run", app_name)) < fake.events.index(("run", migration_name))
+        health_name = next(
+            name for action, name in fake.events if action == "run" and "-health-" in name
+        )
+        assert fake.events.index(("remove", migration_name)) < fake.events.index(
+            ("run", health_name)
+        )
         for args in fake.commands:
             assert args[args.index("--memory") + 1] == "512m"
             assert args[args.index("--cpus") + 1] == "1"
@@ -203,12 +223,22 @@ def test_gate_migrates_in_started_app_and_retains_security_flags(tmp_path):
         result.build_context.cleanup()
 
 
-def test_exec_cannot_target_unowned_container_or_host_shell():
-    runner = DockerCliRunner()
-    runner._call = Mock()
-    with pytest.raises(ValueError, match="unowned"):
-        runner.exec("other-app", ["python", "-m", "app.migrate"])
-    runner.containers.add("bronze-gate-012345abcdef-app")
-    with pytest.raises(ValueError, match="command_not_allowed"):
-        runner.exec("bronze-gate-012345abcdef-app", ["sh", "-c", "anything"])
-    runner._call.assert_not_called()
+def test_gate_does_not_execute_arbitrary_release_command(tmp_path):
+    from ai.gate.service import run_gate
+
+    result = run_analysis(ROOT / "samples/todo", out_dir=tmp_path / "out", log=lambda *_: None)
+    fake = FakeRunner()
+    try:
+        spec = result.deploy_spec.model_copy(
+            update={
+                "release": result.deploy_spec.release.model_copy(
+                    update={"migrate": "echo arbitrary"}
+                )
+            }
+        )
+        report = run_gate(result.build_context, spec, fake, lambda *_: None)
+        assert report.status == "failed" and "trusted_sample_migration_required" in report.reason
+        assert not any(name.endswith("-migrate") for action, name in fake.events if action == "run")
+        assert not fake.containers and not fake.networks and not fake.images
+    finally:
+        result.build_context.cleanup()
