@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel
 
 from ai.cli import main
-from ai.demo_cache import DEFAULT_CACHE, save_cache
+from ai.demo_cache import DEFAULT_CACHE, engine_hash, save_cache
 from ai.detectors import RepoView
 from ai.gate.runner import FakeRunner
 from ai.golden import core_result
@@ -166,7 +166,26 @@ class MustNotCall:
         raise AssertionError("Cache hit must never call LLM")
 
 
-def test_actual_demo_cache_hit_is_historical_and_does_not_call_dependencies(tmp_path):
+@pytest.mark.parametrize("sample", ["todo", "todo-scheduler"])
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "저장된 데모 캐시는 LLM 범위 검사 변경 전 엔진의 결과입니다. "
+        "사용자 확인 후 replay + Docker로 재생성하고 이 임시 xfail을 제거해야 합니다."
+    ),
+)
+def test_stored_demo_cache_matches_current_engine(sample):
+    # No mock: keep known stale cache visible separately from replay behavior tests.
+    manifest = json.loads((DEFAULT_CACHE / sample / "manifest.json").read_text())
+    assert manifest["engine_hash"] == engine_hash(), f"{sample}: cache_engine_hash_mismatch"
+
+
+def test_recorded_demo_cache_hit_with_matching_engine_is_historical(tmp_path, monkeypatch):
+    manifest = json.loads((DEFAULT_CACHE / "todo/manifest.json").read_text())
+    # Exercise replay at its recorded engine version. Never rewrite a historical manifest
+    # to claim that the current engine has passed Docker; mismatch tests remain separate.
+    monkeypatch.setattr("ai.demo_cache.engine_hash", lambda: manifest["engine_hash"])
     logs = []
     result = run_analysis(
         SAMPLE,
@@ -185,7 +204,6 @@ def test_actual_demo_cache_hit_is_historical_and_does_not_call_dependencies(tmp_
     assert result.cost.historical and result.cost.external_calls == 0
     assert all("(사전 실행 결과)" in message for _, message in logs)
     assert all((tmp_path / "out" / name).exists() for name in OUTPUT_NAMES)
-    manifest = json.loads((DEFAULT_CACHE / "todo/manifest.json").read_text())
     assert [(s.value, m.removeprefix("(사전 실행 결과) ")) for s, m in logs[1:]] == [
         (e["stage"], e["message"]) for e in manifest["events"]
     ]

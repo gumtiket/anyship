@@ -14,6 +14,7 @@ from ai.detectors.repo import aliases, qualified
 from ai.llm.base import LLMClient
 from ai.models import Diagnosis, EnvVar, OutputModel, TransformReport, Violation, WarningItem
 from ai.security import SourceMasker, credential_name
+from ai.transform.scope import check_patch_scope, rebase_targets
 from ai.transform.templates import template_changes
 from ai.transform.workspace import Workspace, make_diff, patch_paths, source_files
 
@@ -21,6 +22,38 @@ from ai.transform.workspace import Workspace, make_diff, patch_paths, source_fil
 class PatchResponse(OutputModel):
     diff: str = Field(max_length=100000)
     violation_ids: list[str] = Field(default_factory=list)
+
+
+def _failure_code(error: ValueError | RuntimeError | SyntaxError) -> str:
+    # Only fixed validator codes may enter feedback/warnings; never include source/SDK text.
+    code = str(error) if isinstance(error, ValueError) else "llm_patch_failed"
+    allowed = {
+        "patch_path_not_allowed",
+        "patch_path_prefix",
+        "patch_metadata_forbidden",
+        "patch_delete_or_rename_forbidden",
+        "patch_non_diff_content",
+        "patch_missing_hunk",
+        "git_apply_check_failed",
+        "git_apply_failed",
+        "compileall_failed",
+        "repeated_patch",
+        "dependency_change_not_allowed",
+        "model_class_change_not_allowed",
+        "non_python_change_not_allowed",
+        "unsafe_call_added",
+        "sensitive_value_in_patch",
+        "sensitive_literal_added",
+        "invalid_patch_response",
+        "unexpected_violation_ids",
+        "signals_changed",
+        "framework_changed",
+        "requested_violation_unresolved",
+        "git_timeout",
+        "patch_scope_violation",
+        "patch_target_not_found",
+    }
+    return code if code in allowed else "llm_patch_failed"
 
 
 def identify_sample(repo: RepoView) -> str | None:
@@ -170,7 +203,12 @@ def env_vars(candidate: dict[str, str], masker: SourceMasker | None = None) -> l
 
 
 def _patch_candidate(
-    before: dict[str, str], diff: str, allowed: set[str], masker: SourceMasker
+    before: dict[str, str],
+    diff: str,
+    allowed: set[str],
+    masker: SourceMasker,
+    *,
+    targets: list[Violation] | None = None,
 ) -> dict[str, str]:
     paths = patch_paths(diff, allowed)
     if masker.contains_sensitive(diff):
@@ -195,6 +233,8 @@ def _patch_candidate(
             raise ValueError("framework_changed")
         if not workspace.compile():
             raise ValueError("compileall_failed")
+        if targets is not None:
+            check_patch_scope(before, candidate, paths, targets)
     return candidate
 
 
@@ -203,6 +243,8 @@ def llm_patch(
     targets: list[Violation],
     llm: LLMClient | None,
     masker: SourceMasker,
+    *,
+    reference_sources: dict[str, str] | None = None,
 ) -> tuple[dict[str, str], list[str], int, list[WarningItem]]:
     """Initial attempt + two regenerations, then one attempt per target. Never executes apps."""
     eligible = [
@@ -210,6 +252,8 @@ def llm_patch(
         for v in targets
         if v.source == "rule"
         and v.auto_fixable
+        and v.change_class == "safe"
+        and v.confidence == "confirmed"
         and v.file not in masker.blocked_files
         and v.file.endswith(".py")
     ]
@@ -225,6 +269,7 @@ def llm_patch(
         current: dict[str, str], selected: list[Violation], retry: str | None
     ) -> tuple[dict[str, str], list[str]]:
         nonlocal attempts
+        scoped_targets = rebase_targets(reference_sources or before, current, selected)
         with Workspace(current) as workspace:
             view = RepoView(workspace.root)
             masked = SourceMasker(view)
@@ -237,7 +282,7 @@ def llm_patch(
                 budget -= len(sources[name])
             payload = {
                 "source": sources,
-                "violations": [v.model_dump(mode="json") for v in selected],
+                "violations": [v.model_dump(mode="json") for v in scoped_targets],
                 "validation_error": retry,
             }
         attempts += 1
@@ -259,7 +304,9 @@ def llm_patch(
         seen.add(digest)
         if not proposal.diff:
             return current, []
-        candidate = _patch_candidate(current, proposal.diff, {v.file for v in selected}, masker)
+        candidate = _patch_candidate(
+            current, proposal.diff, {v.file for v in selected}, masker, targets=scoped_targets
+        )
         with Workspace(candidate) as workspace:
             remaining = {(v.rule, v.file) for v in detect(RepoView(workspace.root))}
         addressed = [
@@ -276,45 +323,25 @@ def llm_patch(
             candidate, addressed = attempt(before, eligible, error_code)
             return candidate, addressed, attempts, warnings
         except (ValueError, RuntimeError, SyntaxError) as error:
-            error_code = str(error) if isinstance(error, ValueError) else "llm_patch_failed"
-            # Only our fixed validator codes enter feedback; never expose LLM/SDK/source errors.
-            if error_code not in {
-                "patch_path_not_allowed",
-                "patch_path_prefix",
-                "patch_metadata_forbidden",
-                "patch_delete_or_rename_forbidden",
-                "patch_non_diff_content",
-                "patch_missing_hunk",
-                "git_apply_check_failed",
-                "git_apply_failed",
-                "compileall_failed",
-                "repeated_patch",
-                "dependency_change_not_allowed",
-                "model_class_change_not_allowed",
-                "non_python_change_not_allowed",
-                "unsafe_call_added",
-                "sensitive_value_in_patch",
-                "sensitive_literal_added",
-                "invalid_patch_response",
-                "unexpected_violation_ids",
-                "signals_changed",
-                "framework_changed",
-                "requested_violation_unresolved",
-                "git_timeout",
-            }:
-                error_code = "llm_patch_failed"
-            if error_code == "repeated_patch":
+            failure = _failure_code(error)
+            if failure == "repeated_patch":
                 break
+            error_code = failure
     current, addressed = before, []
     for target in eligible:
         try:
             current, ids = attempt(current, [target], error_code)
             addressed.extend(ids)
-        except (ValueError, RuntimeError, SyntaxError):
+        except (ValueError, RuntimeError, SyntaxError) as error:
+            reason = _failure_code(error)
+            if reason == "repeated_patch":
+                reason = error_code or reason
             warnings.append(
                 WarningItem(
                     code="llm_transform_deferred",
-                    message=f"{target.id}: 재생성/개별 재시도에 실패해 변경을 보류했습니다.",
+                    message=(
+                        f"{target.id}: [{reason}] 재생성/개별 재시도에 실패해 변경을 보류했습니다."
+                    ),
                 )
             )
     return current, sorted(set(addressed)), attempts, warnings
@@ -337,7 +364,9 @@ def propose(
     sample_name = identify_sample(repo)
     candidate, report = template_changes(original, diagnosis, masker, sample_name)
     pending = [v for v in diagnosis.violations if v.id in report.deferred_ids]
-    candidate, addressed, attempts, warnings = llm_patch(candidate, pending, llm, masker)
+    candidate, addressed, attempts, warnings = llm_patch(
+        candidate, pending, llm, masker, reference_sources=original
+    )
     report.llm_attempts = attempts
     report.addressed_ids = sorted(set(report.addressed_ids) | set(addressed))
     report.deferred_ids = sorted(
