@@ -59,11 +59,16 @@ def docker(*args, check=False) -> subprocess.CompletedProcess:
     return subprocess.run(["docker", *args], capture_output=True, text=True, check=check)
 
 
-def assemble(sample: Path, out: Path, target: Path) -> None:
-    """원본 샘플에 changes.diff와 Dockerfile을 적용한 변환본을 만들고, 비밀로 보이는 파일을 일부러 심는다."""
+def assemble(sample: Path, out: Path, target: Path, *, plant: bool = True) -> None:
+    """원본 샘플에 changes.diff와 Dockerfile을 적용한 변환본을 만든다.
+
+    plant=True(기본)는 빌더의 제외 로직만 시험하려고 B의 .dockerignore를 지우고 비밀로 보이는 파일을 일부러 심는다.
+    plant=False는 B가 만든 그대로(.dockerignore 포함, 심은 파일 없음)의 변환본이다."""
     shutil.copytree(sample, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".venv"))
     subprocess.run(["git", "apply", "--whitespace=nowarn", str(out / "changes.diff")], cwd=target, check=True)
     shutil.copy(out / "Dockerfile", target / "Dockerfile")
+    if not plant:
+        return
     (target / ".dockerignore").unlink(missing_ok=True)  # B의 제외 규칙에 기대지 않고 빌더의 제외만 시험한다
     (target / ".git").mkdir()
     (target / ".git" / "config").write_text("[remote] url = https://planted.example/secret\n")
