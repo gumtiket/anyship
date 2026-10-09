@@ -27,6 +27,7 @@ class Settings:
     aws_service_role_arn: str = ""
     aws_regions: tuple[str, ...] = ()
     aws_role_name: str = "deploy-service-role"
+    aws_verify: str = ""  # "sts"면 환경 등록의 연결 확인에 STSAdapter를 쓴다. 기본은 꺼짐(어댑터 연결 대기)
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
 
@@ -40,6 +41,8 @@ class Settings:
         validate_aws_settings(self.aws_template_url, self.aws_service_role_arn, self.aws_regions)
         if not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", self.aws_role_name.replace("{id}", "0" * 32)):
             raise ValueError("APP_AWS_ROLE_NAME must be an IAM role name, optionally containing {id}.")
+        if self.aws_verify not in ("", "sts"):
+            raise ValueError("APP_AWS_VERIFY must be empty or sts.")
         if self.ai_mode not in ("placeholder", "unavailable"):
             raise ValueError("APP_AI_MODE must be placeholder or unavailable.")
         if self.production and self.ai_mode == "placeholder":
@@ -93,4 +96,5 @@ class Settings:
             aws_service_role_arn=os.getenv("APP_AWS_SERVICE_ROLE_ARN", "").strip(),
             aws_regions=tuple(dict.fromkeys(r.strip() for r in os.getenv("APP_AWS_REGIONS", "").split(",") if r.strip())),
             aws_role_name=os.getenv("APP_AWS_ROLE_NAME", "deploy-service-role").strip(),
+            aws_verify=os.getenv("APP_AWS_VERIFY", "").strip().lower(),
         )
