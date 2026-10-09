@@ -160,6 +160,8 @@ class ValidatingClient:
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
                 latency_s=result.latency_s,
+                usage=result.usage,
+                stop_reason=result.stop_reason,
             )
             result.cost_usd = cost.cost_usd
             result.parsed = None

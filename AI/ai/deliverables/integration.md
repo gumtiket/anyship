@@ -45,3 +45,42 @@ P5는 `recommendation.set`을 규칙으로 고정하고 LLM에는 근거 문장�
 함수에 `runner=DockerCliRunner(), decision_llm=client, repair_llm=client`를 추가하면 자체 샘플의 추천/검증까지 수행한다. 최대 게이트 실행은 최초 포함 3회이며 성공·반복 제안·보안 검사 거부·비코드 실패 시 일찍 종료한다. `gate_report.attempts`, `retry_stop_reason`, `timings_s`를 A가 그대로 읽을 수 있다. 단계별 토큰/비용은 `cost.stages`에 모이고, 단가 미확정은 null이다. CLI `--no-gate`는 게이트 생략, `--no-compare`는 원본 복사본 비교 생략이다. 일반 앱은 이 옵션과 무관하게 게이트 skipped다.
 
 P6의 엄격 LLM replay와 사전 결과 캐시를 지원한다. 현재 실행과 과거 검증/사용량 표시 및 예외 처리의 상세 계약은 docs/integration-for-service.md를 따른다. cache의 gate.status=skipped / historical_status=passed이며 pr_eligible=false다. 캐시 비용은 historical=true와 external_calls=0으로 표시한다.
+
+## Anthropic 직접 API 선택 연결
+
+설치: `python -m pip install -e 'ai[anthropic]'`. AI 분석 프로세스에
+`ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL_ID_STRONG`, `ANTHROPIC_MODEL_ID_FAST`를 주입한다.
+키는 SDK의 기본 인증 경로가 해석하며 함수/CLI 인자, 작업 JSON, 로그/trace에 넣지 않는다.
+선택 설정은 `ANTHROPIC_EFFORT_STRONG`, `ANTHROPIC_EFFORT_FAST`,
+`ANTHROPIC_REFUSAL_FALLBACK`이다. 이 키와 모델/effort 설정은 게이트 컨테이너에 절대 넘기지 않는다.
+기존 runner의 환경 allowlist를 유지하고 프로세스 환경 전체를 컨테이너에 복사하지 않는다.
+소스는 기존 마스킹 후 Anthropic으로 직접 전송된다.
+
+```python
+from ai.llm import AnthropicClient
+
+client = AnthropicClient()  # 모델 환경변수 필수, SDK 인증 사용
+result = run_analysis(
+    repo_path,
+    out_dir=output_dir,
+    llm=client,
+    decision_llm=client,
+    no_gate=True,
+    save_llm_trace=True,
+)
+# artifact_llm/repair_llm은 필요할 때 명시적으로 선택한다.
+if result.build_context is not None:
+    result.build_context.cleanup()
+```
+
+기존 Bedrock 연결과 기본값, 함수 시그니처는 유지한다. `--llm anthropic` CLI는
+기존 Bedrock CLI처럼 llm/decision_llm/repair_llm에 같은 클라이언트를 전달한다.
+짧은 확인 호출은 `python -m ai llm-check --llm anthropic --tier fast`이며 재시도 없이
+1회만 전송한다. 결과는 out/llm-check/llm-check.json에 저장한다. 인증 오류/400/403/404,
+타임아웃/최종 refusal/max_tokens는 자동 재호출하지 않는다. 개별 SDK timeout은 60초이며
+전체 서비스 요청의 90초 제한 충족은 실측으로 따로 확인해야 한다.
+
+fallback이 실행되면 trace의 실제 model_id, usage.fallback_ran/served_by_fallback/iterations를
+확인한다. cost.calls는 모델별 시도이며 HTTP 요청 수와 다를 수 있다. fallback 앞선
+refusal의 청구 여부를 모르면 cost.total.cost_usd=null이다. 토큰·known_cost_usd는 부분 집계다.
+게이트/PR 자격·템플릿·replay/데모 캐시 계약은 변경하지 않는다.

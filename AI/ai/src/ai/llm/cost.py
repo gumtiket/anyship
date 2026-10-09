@@ -1,6 +1,7 @@
 import json
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
 
@@ -10,6 +11,12 @@ from ai.models import CallCost, CostReport, CostSummary, OutputModel
 class ModelPricing(OutputModel):
     input_usd_per_million: float | None = Field(default=None, ge=0)
     output_usd_per_million: float | None = Field(default=None, ge=0)
+    cache_read_usd_per_million: float | None = Field(default=None, ge=0)
+    cache_write_5m_usd_per_million: float | None = Field(default=None, ge=0)
+    cache_write_1h_usd_per_million: float | None = Field(default=None, ge=0)
+    long_prompt_threshold: int | None = Field(default=None, ge=1)
+    long_input_usd_per_million: float | None = Field(default=None, ge=0)
+    long_output_usd_per_million: float | None = Field(default=None, ge=0)
 
 
 class CostTracker:
@@ -40,7 +47,19 @@ class CostTracker:
         input_tokens: int,
         output_tokens: int,
         latency_s: float = 0,
+        usage: dict[str, Any] | None = None,
+        stop_reason: str | None = None,
     ) -> CallCost:
+        if usage and usage.get("provider") == "anthropic":
+            return self._record_anthropic(
+                stage=stage,
+                model_id=model_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                latency_s=latency_s,
+                usage=usage,
+                stop_reason=stop_reason,
+            )
         # Validate token counts before computing a price.
         call = CallCost(
             stage=stage,
@@ -61,6 +80,92 @@ class CostTracker:
             ) / 1_000_000
         self.calls.append(call)
         return call
+
+    def _record_anthropic(
+        self,
+        *,
+        stage: str,
+        model_id: str,
+        input_tokens: int,
+        output_tokens: int,
+        latency_s: float,
+        usage: dict[str, Any],
+        stop_reason: str | None,
+    ) -> CallCost:
+        iterations = usage.get("iterations")
+        entries = iterations or [{**usage, "model": model_id}]
+        recorded = []
+        for index, entry in enumerate(entries):
+            last = index == len(entries) - 1
+            call = CallCost(
+                stage=stage,
+                model_id=entry["model"],
+                input_tokens=entry["input_tokens"],
+                output_tokens=entry["output_tokens"],
+                latency_s=latency_s if last else 0,
+            )
+            call.cost_usd = self._anthropic_price(call, entry)
+            if not last and call.output_tokens == 0:
+                # Earlier refusal categories aren't reported per iteration. Their
+                # billing status cannot be inferred from a zero output count.
+                call.cost_usd = None
+            if last and stop_reason == "refusal" and call.output_tokens == 0:
+                category = usage.get("refusal_category")
+                if category in {"cyber", "general_harms"} or category is None:
+                    call.cost_usd = 0.0
+                elif category == "unknown":
+                    call.cost_usd = None
+            if usage.get("fallback_ran") and not iterations:
+                call.cost_usd = None
+            recorded.append(call)
+        self.calls.extend(recorded)
+        return CallCost(
+            stage=stage,
+            model_id=model_id,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            latency_s=latency_s,
+            cost_usd=sum(call.cost_usd for call in recorded)
+            if all(call.cost_usd is not None for call in recorded)
+            else None,
+        )
+
+    def _anthropic_price(self, call: CallCost, usage: dict[str, Any]) -> float | None:
+        price = self.prices.get(call.model_id)
+        if price is None:
+            return None
+        read = usage.get("cache_read_input_tokens", 0)
+        created = usage.get("cache_creation_input_tokens", 0)
+        split = usage.get("cache_creation") or {}
+        write_5m = split.get("ephemeral_5m_input_tokens", 0)
+        write_1h = split.get("ephemeral_1h_input_tokens", 0)
+        if created != write_5m + write_1h:
+            return None
+        long = price.long_prompt_threshold is not None and (
+            call.input_tokens + read + created > price.long_prompt_threshold
+        )
+        # Long-context cache rates are not registered in this first integration.
+        if long and (read or created):
+            return None
+        terms = (
+            (
+                call.input_tokens,
+                price.long_input_usd_per_million if long else price.input_usd_per_million,
+            ),
+            (
+                call.output_tokens,
+                price.long_output_usd_per_million if long else price.output_usd_per_million,
+            ),
+            (read, price.cache_read_usd_per_million),
+            (write_5m, price.cache_write_5m_usd_per_million),
+            (write_1h, price.cache_write_1h_usd_per_million),
+        )
+        if any(count and rate is None for count, rate in terms):
+            return None
+        # Missing base pricing remains unknown even on a zero-token result.
+        if terms[0][1] is None or terms[1][1] is None:
+            return None
+        return sum(count * rate for count, rate in terms if rate is not None) / 1_000_000
 
     @staticmethod
     def _summary(calls: list[CallCost], unobserved_requests: int = 0) -> CostSummary:
