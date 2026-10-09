@@ -26,8 +26,9 @@ variable "env_id" {
 
   validation {
     # 리소스 이름에 그대로 들어가므로 소문자·숫자·하이픈만 허용한다.
-    condition     = can(regex("^[a-z0-9][a-z0-9-]{1,19}$", var.env_id))
-    error_message = "env_id는 소문자, 숫자, 하이픈으로 2~20자여야 한다."
+    # 상한 21자는 온프레미스 어댑터(DNS)의 환경 ID 제한과 맞춘 것이다.
+    condition     = can(regex("^[a-z0-9][a-z0-9-]{1,20}$", var.env_id))
+    error_message = "env_id는 소문자, 숫자, 하이픈으로 2~21자여야 한다."
   }
 }
 
