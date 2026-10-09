@@ -80,9 +80,14 @@ class ComposeHost:
                               "up", "-d", "--remove-orphans"], timeout=timeout)
 
     def migrate(self, app: str, command: str, *, timeout: float = 300) -> CommandResult:
-        """앱 컨테이너 안에서만 마이그레이션 명령을 실행한다(서버의 셸에서 실행하지 않는다)."""
+        """앱 컨테이너 안에서만 마이그레이션 명령을 실행한다(서버의 셸에서 실행하지 않는다).
+
+        `run`이 만드는 임시 컨테이너는 compose.yaml의 Traefik 라벨을 그대로 물려받는다. 그러면 Traefik이 같은 서비스의
+        두 번째 서버로 등록했다가, 컨테이너가 사라진 뒤 설정이 갱신되기 전까지 없는 주소로 요청을 보내 502가 한 번씩 난다
+        (실제 호스트에서 재현했다). 그래서 임시 컨테이너에서만 Traefik을 끈다."""
         return self._ssh.run(["docker", "compose", "--project-directory", self._app_dir(app),
-                              "run", "--rm", "web", "sh", "-c", command], timeout=timeout)
+                              "run", "--rm", "--label", "traefik.enable=false", "web", "sh", "-c", command],
+                             timeout=timeout)
 
     # -- 이미 배포된 앱을 살펴보고 바꾸고 지우는 도구 ------------------------------------------
     def exists(self, app: str) -> bool:

@@ -112,12 +112,13 @@ def main() -> int:
 
         expect("/healthz가 200이다", probe("GET", "/healthz")[0] == 200)
         status, text = probe("GET", "/todos")
-        titles = [item["title"] for item in json.loads(text)] if status == 200 else []
-        expect("DB에서 샘플 할 일 2개를 읽는다(SSL 접속과 시드)", {"샘플 앱 실행 확인", "배포 설정 검토"} <= set(titles))
-        status, _ = probe("POST", "/todos", {"title": "배포 확인용 할 일"})
+        expect("DB에서 목록을 읽는다(SSL 접속). 200이고 JSON 목록이다", status == 200 and isinstance(json.loads(text), list))
+        # 변환본은 시작할 때 시드를 넣지 않는다(DB 초기화를 python -m app.migrate로 분리). 앱 DB는 destroy해도 남아서 이전 실행의 항목이 있을 수 있다.
+        title = "배포 확인용 할 일 " + SHA
+        status, written = probe("POST", "/todos", {"title": title})
         expect("새 할 일을 쓸 수 있다(201)", status == 201)
         status, text = probe("GET", "/todos")
-        expect("쓴 할 일이 다시 읽힌다", status == 200 and "배포 확인용 할 일" in text)
+        expect("쓴 할 일이 다시 읽힌다", status == 200 and written and json.loads(written)["id"] in [i["id"] for i in json.loads(text)])
         probe("GET", "/healthz")  # 같은 요청을 한 번 더: 처음에만 실패했는지(일시적인지) 본다
         expect("status가 running이다", adapter.status(env, app).state == "running")
 

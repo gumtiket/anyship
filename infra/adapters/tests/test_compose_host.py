@@ -130,6 +130,16 @@ def test_migrate_runs_inside_the_app_container_and_the_command_stays_one_argumen
     assert server.last()[:6] == ["docker", "compose", "--project-directory", "/opt/apps/todo", "run", "--rm"]
 
 
+def test_the_migration_container_is_hidden_from_traefik():
+    # 임시 컨테이너가 앱의 Traefik 라벨을 물려받으면, 사라질 때 Traefik이 없는 주소로 요청을 보내 502가 난다.
+    host, server = make()
+    host.migrate("todo", "python -m app.migrate")
+    command = server.last()
+    assert command[command.index("--label") + 1] == "traefik.enable=false"
+    assert command.index("--label") < command.index("web")  # 서비스 이름보다 앞에 와야 run의 옵션으로 읽힌다
+    assert command.count("--label") == 1 and command[-1] == "python -m app.migrate"
+
+
 @pytest.mark.parametrize("call", [
     lambda h: h.up("Bad Name"), lambda h: h.up("../etc"), lambda h: h.migrate("a", "x"),
     lambda h: h.write_stack("x" * 70, None), lambda h: h.read_previous_env("a;b"),
