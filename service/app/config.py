@@ -40,10 +40,10 @@ class Settings:
         validate_aws_settings(self.aws_template_url, self.aws_service_role_arn, self.aws_regions)
         if not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", self.aws_role_name.replace("{id}", "0" * 32)):
             raise ValueError("APP_AWS_ROLE_NAME must be an IAM role name, optionally containing {id}.")
-        if self.ai_mode not in ("placeholder", "unavailable"):
-            raise ValueError("APP_AI_MODE must be placeholder or unavailable.")
-        if self.production and self.ai_mode == "placeholder":
-            raise ValueError("AI placeholder is only available in development.")
+        if self.ai_mode not in ("placeholder", "unavailable", "fake"):
+            raise ValueError("APP_AI_MODE must be placeholder, fake or unavailable.")
+        if self.production and self.ai_mode in ("placeholder", "fake"):
+            raise ValueError("AI placeholder/fake is only available in development.")
         origin = urlsplit(self.app_origin)
         if origin.scheme not in ("http", "https") or not origin.netloc or origin.path or origin.query or origin.fragment:
             raise ValueError("APP_APP_ORIGIN must be an origin without a trailing slash.")

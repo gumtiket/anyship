@@ -20,11 +20,13 @@ from app.app import create_app
 from app.config import Settings
 from app.db import Base
 from .test_real_workflow import GitHubHTTP, login
+from .test_ai_analyses import AnalysisGitHub
 
 
 def main():
     with TemporaryDirectory(prefix="anyship-browser-test-") as directory:
-        fixture = GitHubHTTP()
+        fake_ai = "--ai" in sys.argv
+        fixture = AnalysisGitHub() if fake_ai else GitHubHTTP()
         onboarding = "--onboarding" in sys.argv
         mock = "--mock" in sys.argv
         fixture.repo_selected = not onboarding
@@ -34,7 +36,7 @@ def main():
             app = create_app(Settings(
                 app_origin="http://127.0.0.1:8001", database_url=f"sqlite:///{Path(directory) / 'test.db'}",
                 token_key=Fernet.generate_key().decode(), github_client_id="fixture",
-                github_client_secret="fixture", github_app_slug="fixture", ai_mode="placeholder",
+                github_client_secret="fixture", github_app_slug="fixture", ai_mode="fake" if fake_ai else "placeholder",
                 deployment_mode="mock" if mock else "unavailable", mock_step_delay=0.15,
             ))
             Base.metadata.create_all(app.state.engine)
@@ -68,7 +70,7 @@ def main():
             with TestClient(app, base_url="http://127.0.0.1:8001") as client:
                 login(client)
                 cookie = client.cookies.get("app_session")
-                if mock:
+                if mock or fake_ai:
                     project = client.post("/api/projects", json={"repository_url": "https://github.com/owner/real-repo", "branch": "main"},
                         headers={"Origin": "http://127.0.0.1:8001", "X-CSRF-Token": client.get("/api/me").json()["csrf_token"]})
                     assert project.status_code == 201, project.text

@@ -98,7 +98,7 @@ class Workspace:
         for name, source in files.items():
             destination = self.root / name
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(source, encoding="utf-8")
+            destination.write_bytes(source.encode("utf-8"))
         self.git("init", "--quiet", "--template=")
 
     def __enter__(self) -> "Workspace":
@@ -113,9 +113,8 @@ class Workspace:
                 ["git", *args],
                 cwd=self.root,
                 env=self.env,
-                input=diff,
+                input=diff.encode("utf-8") if diff is not None else None,
                 capture_output=True,
-                text=True,
                 timeout=20,
             )
         except subprocess.TimeoutExpired:
@@ -144,4 +143,4 @@ class Workspace:
             return False
 
     def read(self, names: set[str]) -> dict[str, str]:
-        return {name: (self.root / name).read_text(encoding="utf-8") for name in sorted(names)}
+        return {name: (self.root / name).read_bytes().decode("utf-8") for name in sorted(names)}

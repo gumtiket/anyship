@@ -1,6 +1,6 @@
 # AnyShip 로컬 실행 및 실제 GitHub 테스트
 
-AnyShip은 GitHub 로그인 → 저장소 URL 등록 → 수정 항목 등록·실행 → diff 검토 → 실제 GitHub Draft PR 생성을 제공합니다. 현재 AI만 임시 구현입니다. `APP_AI_MODE=placeholder`로 실행하면 `anyship_ai_placeholder.py`에 AI 미연결 안내 주석을 추가합니다. 가짜 로그인·저장소·PR로 대체하지 않습니다.
+AnyShip은 GitHub 로그인 → 저장소 URL 등록 → 분석·수정안 검토를 제공합니다. `APP_AI_MODE=fake`는 실제 AI 파이프라인에 사전 모델 응답을 연결해 진단·전체 diff·검토 기록까지 확인합니다. [Fake AI 연결 검증](AI_INTEGRATION.md)의 설치와 `0008` 마이그레이션을 적용하세요. `APP_AI_MODE=placeholder`는 안내 파일을 추가해 실제 GitHub Draft PR 흐름을 시험하는 기존 모드입니다.
 
 ## 이 PC에서 실행
 
@@ -124,7 +124,7 @@ Python 3.12 이상, Node.js 22 이상, pnpm과 PostgreSQL 실행 파일을 준�
 ```powershell
 cd service
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[web,test]"
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 cd ..\frontend
 pnpm install --frozen-lockfile
 pnpm build
