@@ -40,8 +40,9 @@ class AwsEnvironment(AdapterModel):
     # RDS 주소는 psql 접속 문자열에 들어가므로, 임의의 호스트가 끼어들지 못하게 RDS 도메인만 허용한다.
     db_address: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,62}(\.[a-z0-9-]{1,63})*\.rds\.amazonaws\.com$")
     db_port: int = Field(default=5432, ge=1024, le=65535)
+    # RDS가 관리하는 비밀의 이름은 `rds!db-<UUID>`라서 `!`를 허용해야 한다.
     db_secret_arn: str | None = Field(
-        default=None, pattern=r"^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[\w+=,.@/-]+$")
+        default=None, pattern=r"^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[\w+=,.@!/-]+$")
 
 
 class OnpremEnvironment(AdapterModel):
