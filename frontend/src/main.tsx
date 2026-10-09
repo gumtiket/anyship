@@ -7,9 +7,10 @@ import { ChangeWorkflow } from './ChangeWorkflow';
 import { RepositoryConnect } from './RepositoryConnect';
 import { AwsEnvironments } from './AwsEnvironments';
 import { DeleteRegistration } from './DeleteRegistration';
+import { MockDeployment } from './MockDeployment';
 import { api, ApiError, mutation, type ConnectionDraft, type Project } from './api';
 
-type Config = { demo: boolean; github_configured: boolean; ai_mode: string; aws_available: boolean; aws_regions: string[] };
+type Config = { demo: boolean; github_configured: boolean; ai_mode: string; aws_available: boolean; aws_regions: string[]; deployment_mode: string };
 type Me = { user: { name: string; login: string }; workspace: { id: string; name: string }; csrf_token: string };
 const authErrors: Record<string, string> = {
   incorrect_client_credentials: '현재 GitHub 로그인 연결에 문제가 있습니다. 잠시 후 다시 시도하고, 반복되면 서비스 관리자에게 알려주세요.',
@@ -129,6 +130,7 @@ function App() {
         </>}
         {screen === 'connect' && <RepositoryConnect csrf={me.csrf_token} returnState={returnState} onReturnHandled={() => setReturnState(null)} onConnected={openConnected} onError={sessionError}/>}
         {screen === 'detail' && (detail ? <><div className="page-heading"><div><span className="eyebrow">PROJECT</span><h1>{detail.full_name.split('/').pop()}</h1><a className="text-link" href={`https://github.com/${detail.full_name}`} target="_blank" rel="noreferrer">{detail.full_name} <ExternalLink size={13}/></a></div><span className="status"><GitBranch size={14}/> {detail.branch}</span></div><ChangeWorkflow key={detail.id} projectId={detail.id} csrf={me.csrf_token} aiMode={config?.ai_mode ?? 'unavailable'} request={api} onError={sessionError}/>
+          <MockDeployment key={detail.id} projectId={detail.id} csrf={me.csrf_token} mode={config?.deployment_mode ?? 'unavailable'} onError={sessionError}/>
           <div className="registration-actions"><button className="text-link" onClick={() => navigate('projects')}>프로젝트 목록으로 돌아가기 <ArrowRight size={15}/></button>
             <DeleteRegistration key={detail.id} label="저장소 연결 삭제" name={detail.full_name}
               description="AnyShip의 프로젝트 연결과 분석·검토 기록을 삭제합니다. GitHub 원본 저장소, 브랜치, PR은 그대로 유지되며 저장소를 다시 연결할 수 있습니다."

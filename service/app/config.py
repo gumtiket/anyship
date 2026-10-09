@@ -21,6 +21,8 @@ class Settings:
     demo: bool = False
     ai_mode: str = "unavailable"
     production: bool = False
+    deployment_mode: str = "unavailable"
+    mock_step_delay: float = 0.3
     aws_template_url: str = field(default="", repr=False)
     aws_service_role_arn: str = ""
     aws_regions: tuple[str, ...] = ()
@@ -29,6 +31,12 @@ class Settings:
     demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
 
     def __post_init__(self):
+        if self.deployment_mode not in ("unavailable", "mock"):
+            raise ValueError("APP_DEPLOYMENT_MODE must be unavailable or mock.")
+        if self.production and self.deployment_mode == "mock":
+            raise ValueError("Mock deployments are only available in development.")
+        if not 0 <= self.mock_step_delay <= 2:
+            raise ValueError("APP_MOCK_STEP_DELAY must be between 0 and 2 seconds.")
         validate_aws_settings(self.aws_template_url, self.aws_service_role_arn, self.aws_regions)
         if not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", self.aws_role_name.replace("{id}", "0" * 32)):
             raise ValueError("APP_AWS_ROLE_NAME must be an IAM role name, optionally containing {id}.")
@@ -79,6 +87,8 @@ class Settings:
             demo=os.getenv("APP_DEMO", "false").lower() == "true",
             ai_mode=os.getenv("APP_AI_MODE", "unavailable"),
             production=os.getenv("APP_ENV", "development") == "production",
+            deployment_mode=os.getenv("APP_DEPLOYMENT_MODE", "unavailable"),
+            mock_step_delay=float(os.getenv("APP_MOCK_STEP_DELAY", "0.3")),
             aws_template_url=os.getenv("APP_AWS_TEMPLATE_URL", "").strip(),
             aws_service_role_arn=os.getenv("APP_AWS_SERVICE_ROLE_ARN", "").strip(),
             aws_regions=tuple(dict.fromkeys(r.strip() for r in os.getenv("APP_AWS_REGIONS", "").split(",") if r.strip())),
