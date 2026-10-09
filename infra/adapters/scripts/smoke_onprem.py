@@ -7,6 +7,11 @@ check -> deploy -> 재배포 -> status -> rollback -> (없는 버전으로 rollb
     python scripts/smoke_onprem.py --host 3.38.88.141 --env-id demo --staging
 
 --keep을 주면 마지막에 destroy를 하지 않고 시험 앱을 남겨 둔다.
+
+--dns를 주면 Route 53 레코드도 어댑터가 만들고 지운다(boto3와 서비스 서버 역할의 권한이 필요하다).
+새 환경 ID로만 쓴다(레코드를 지우므로 진짜 demo 환경과는 같이 쓰지 않는다).
+
+    python scripts/smoke_onprem.py --host 3.38.88.141 --env-id dnstest --dns --staging
 """
 import argparse
 import json
@@ -65,6 +70,7 @@ SPEC = {
 }
 
 results: list[tuple[str, bool]] = []
+messages: list[str] = []  # 어댑터가 남긴 로그 문구(DNS를 바꿨는지 확인하는 데 쓴다)
 
 
 def build(tag: str) -> None:
@@ -75,6 +81,7 @@ def build(tag: str) -> None:
 
 
 def log(event) -> None:
+    messages.append(event.message)
     prefix = f"[{event.step}/{event.total}] {event.name}" if event.step else f"({event.level})"
     print(f"    {prefix}: {event.message}")
 
@@ -125,10 +132,20 @@ def main() -> int:
     parser.add_argument("--domain", default="anyship.cloud")
     parser.add_argument("--staging", action="store_true", help="Let's Encrypt staging 인증서면 TLS 검증을 끈다")
     parser.add_argument("--keep", action="store_true", help="마지막에 destroy하지 않고 시험 앱을 남긴다")
+    parser.add_argument("--dns", action="store_true", help="Route 53 레코드도 어댑터가 만들고 지운다")
     args = parser.parse_args()
+    if args.dns and args.env_id == "demo":
+        print("--dns는 진짜 demo 환경과 같이 쓸 수 없습니다(끝에서 환경의 레코드를 지웁니다). 다른 --env-id를 쓰세요.")
+        return 2
 
     env = OnpremEnvironment(env_id=args.env_id, host=args.host)
-    adapter = OnpremAdapter(Path(args.key), base_domain=args.domain, verify_tls=not args.staging)
+    records = None
+    if args.dns:
+        from anyship_adapters.dns import WildcardRecords
+        records = WildcardRecords(base_domain=args.domain)
+        if records.remove(args.env_id):  # 항상 레코드가 없는 새 환경에서 시작한다
+            print(f"(이전 시험이 남긴 {args.env_id} 레코드를 지웠습니다)")
+    adapter = OnpremAdapter(Path(args.key), base_domain=args.domain, verify_tls=not args.staging, dns=records)
     url = f"https://{APP}.{args.env_id}.onprem.{args.domain}"
 
     print("1) check")
@@ -143,10 +160,15 @@ def main() -> int:
     if not first.ok:
         return 1
     expect("공개 주소가 200으로 응답한다", http(url + "/", args.staging)[0] == 200)
+    if args.dns:
+        expect("첫 배포가 DNS 레코드를 새로 만들었다", any("새로 반영" in m for m in messages))
+        messages.clear()
 
     print(f"3) 재배포 {APP}:{V2} (서버의 비밀을 재사용하는지)")
     second = deploy(adapter, env, V2)
     expect("재배포가 성공한다", second.ok)
+    if args.dns:
+        expect("재배포는 DNS 레코드를 건드리지 않았다", any("이미 맞습니다" in m for m in messages))
     expect("새로 만든 비밀이 없다(서버의 비밀을 재사용)", second.ok and second.details.get("generated") == [])
     expect("재배포 뒤에도 200으로 응답한다", http(url + "/", args.staging)[0] == 200)
 
@@ -177,6 +199,13 @@ def main() -> int:
         expect("삭제 뒤 상태가 not_deployed이다", adapter.status(env, APP).state == "not_deployed")
         expect("삭제 뒤 주소가 더 이상 200이 아니다", http(url + "/", args.staging)[0] != 200)
         expect("다시 삭제해도 성공한다(여러 번 해도 안전)", adapter.destroy(env, APP, log).ok)
+        if args.dns:
+            print("8) 환경의 DNS 레코드 삭제")
+            messages.clear()
+            dns_gone = timed(lambda: adapter.remove_environment_dns(env, log))
+            show(dns_gone)
+            expect("환경 DNS 삭제가 성공한다", dns_gone.ok and any("지웠습니다" in m for m in messages))
+            expect("레코드가 실제로 없어졌다(다시 지울 게 없다)", records.remove(args.env_id) is False)
 
     failed = [label for label, ok in results if not ok]
     print(f"\n결과: {len(results) - len(failed)}/{len(results)} OK")
