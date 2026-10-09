@@ -336,6 +336,54 @@ EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_sample_deploy.py   --role
 **B의 변환본에 대해 알아 둘 점**: 변환본은 서버 시작 때 DB를 초기화하지 않고 `python -m app.migrate`로 분리했으며, 이 마이그레이션은 시드 데이터를 넣지 않습니다.
 그래서 배포된 샘플은 빈 목록으로 시작합니다.
 
+## 배포 파이프라인 (`deployer`, `foundation`)
+
+서비스(A)가 부를 입구입니다. 소스 폴더와 커밋 SHA를 주면 이미지 빌드부터 공개 URL까지 한 번의 호출로 잇습니다.
+
+```python
+from anyship_adapters.deployer import Deployer
+from anyship_adapters.foundation import FoundationSettings
+from anyship_adapters.image_builder import ImageBuilder
+from anyship_adapters.terraform_runner import TerraformRunner
+
+deployer = Deployer(
+    {"aws-always-on": aws_adapter, "onprem": onprem_adapter},
+    ImageBuilder(),
+    runner=TerraformRunner(Path("infra/user-account")),   # runner와 foundation은 함께 줘야 한다(없으면 기반 단계를 건너뜀)
+    foundation=FoundationSettings(service_server_ip="...", ssh_public_key="ssh-ed25519 ...", acme_email="..."),
+)
+result = deployer.deploy(env, spec, Path("/path/to/merged/source"), commit_sha, secrets, log, set_name="aws-always-on")
+result.ok, result.url, result.image_tag
+result.details["stage"]             # 실패했을 때: spec / build / foundation / check / deploy
+result.details["foundation"]        # 성공했을 때(aws): host, db_address, db_port, db_secret_arn. 서비스가 환경 레코드에 저장할 값
+result.details["foundation_created"]  # 이번 호출이 기반을 새로 만들었으면 True
+```
+
+**순서**: 입력 검사 → 이미지 빌드 → (aws) 공용 기반 확인 → 연결 확인(`check`) → 배포 → 오래된 이미지 정리. 로그는 큰 단계(aws 1/5~5/5, 온프레미스 1/4~4/4)로
+다시 번호를 붙여 흘려 보내고, 부품 안쪽 번호는 메시지 앞에 `[3/8]`로 남습니다.
+
+- **입력 검사를 먼저 합니다.** 명세, 사용자 비밀 누락, SHA 형식, 앱 이름 길이(DB 이름 한도), 세트와 환경 종류 불일치는 빌드나 20분짜리 기반 생성을 시작하기 전에 `stage="spec"`으로 거절합니다.
+- **공용 기반(`ensure_foundation`)**: state에 출력이 있으면 읽기만 하고(약 10초), **state가 비어 있을 때만** `apply`로 만듭니다(첫 배포만, 약 20분).
+  `state_bucket`이 없거나 역할을 맡지 못했거나 잠금이 잡혀 있거나 출력이 이상하면 apply를 시작하지 않고 오류를 그대로 올립니다.
+  서비스가 저장해 둔 기반 값이 있어도 매번 읽어서 최신 값을 씁니다(호스트가 바뀌었을 때 낡은 값을 쓰지 않으려는 것).
+- **실패는 예외가 아니라 `ok=False` 결과**입니다. 실패한 단계 뒤는 실행하지 않고 정리도 하지 않습니다. 정리 실패는 경고만 남기고 배포 결과를 바꾸지 않습니다.
+  예기치 않은 예외는 `deploy_pipeline_error`(재시도 가능)로 돌려주며 `details["exception"]`에는 예외 종류만 싣습니다(원문에 비밀이 섞일 수 있어서).
+- 결과와 로그, 실패 상세에서 이번 배포의 비밀은 `***`로 가려집니다.
+- 기반을 만들 때 쓰는 값(`FoundationSettings`)은 환경이 아니라 서비스가 아는 값입니다. 선택 변수(`vpc_cidr`, `host_instance_type`, `host_volume_size`,
+  `db_instance_class`, `db_allocated_storage`)만 `overrides`로 바꿀 수 있습니다.
+
+**시험**
+
+```bash
+python -m pytest infra/adapters        # test_foundation.py, test_deployer.py 포함
+
+# 서비스 서버에서. 기반이 이미 있어야 한다(기반을 만들지 않고, apply는 막아 둔다)
+EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_deployer.py --role-arn <역할 ARN> --state-bucket <StateBucketName> --staging
+```
+
+`smoke_deployer.py`는 잘못된 입력의 조기 거절, 한 번의 호출로 5단계 로그와 기반 값이 결과에 실리는지, 공개 주소에서 읽기와 쓰기, `destroy`를 확인합니다(서버에서 13/13).
+**아직 서버에서 확인하지 않은 것**: 기반이 없을 때 처음부터 만드는 경로(실제 `apply` 약 20분과 실시간 로그, `created=True`).
+
 ## 오류 코드 (현재)
 
 mock이 내는 코드이고, 실제 어댑터가 생기면 더 늘어납니다
@@ -395,8 +443,9 @@ python -m pytest infra/adapters
 
 ## 남은 것
 
-- 공용 기반을 첫 배포 때 만드는 `ensure_foundation`(`terraform_runner` 위에 얹는 어댑터 메서드), `*.aws` DNS 자동화
-- `terraform_runner`로 `apply`(약 20분)와 실시간 진행 로그를 실제 계정에서 시험(지금은 `plan`과 `output`만 확인)
+- `*.aws` DNS 자동화
+- 기반을 처음부터 만드는 경로(`ensure_foundation`의 `apply`, 약 20분과 실시간 진행 로그)를 실제 계정에서 시험(지금은 가짜 실행기 시험과 `plan`, `output`만 확인)
+- 서비스 연동: 소스 가져오기, 환경 레코드에 기반 값과 `state_bucket` 저장, 배포 실행기와 잠금, 화면
 - Lambda 세트(`aws-serverless`)
 - 격리된 빌드 환경(지금은 서비스 서버에서 사용자 `Dockerfile`을 실행하므로 샘플 레포에만 쓸 것), 빌드 컨테이너가 서비스 포트에 닿는 것 막기
 - 앱의 비밀을 Secrets Manager에 보관(현재는 호스트의 `app.env`). 호스트 교체에도 비밀을 유지하고, 사용자 입력 비밀을
