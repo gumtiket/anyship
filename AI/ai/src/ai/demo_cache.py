@@ -58,6 +58,8 @@ def settings_key(
     tfvars_overrides=None,
     cost_assumptions=None,
     compare_original=True,
+    app_name=None,
+    max_request_seconds=10,
 ) -> dict:
     return {
         "target_env": target_env,
@@ -68,6 +70,8 @@ def settings_key(
         "tfvars_overrides": tfvars_overrides or {},
         "cost_assumptions": cost_assumptions.model_dump(mode="json") if cost_assumptions else None,
         "compare_original": compare_original,
+        "app_name": app_name,
+        "max_request_seconds": max_request_seconds,
     }
 
 
@@ -78,21 +82,28 @@ def save_cache(
     *,
     root: Path = DEFAULT_CACHE,
     settings: dict | None = None,
+    allow_replay: bool = False,
+    recorded_llm_usage: dict | None = None,
 ) -> Path:
     view = RepoView(repo)
     sample = identify_sample(view)
+    replay = allow_replay and result.execution_source == "llm_replay"
+    valid_calls = bool(result.cost.calls) and all(
+        call.model_id.startswith("replay:") and call.input_tokens == call.output_tokens == 0
+        if replay
+        else call.model_id.startswith(("global.anthropic.", "global.openai.", "us."))
+        for call in result.cost.calls
+    )
     if (
         sample is None
         or result.gate_report.status != "passed"
         or result.gate_report.runner != "docker"
         or result.diagnosis.enrichment_status != "completed"
         or result.recommendation.rationale_source != "llm"
-        or not result.cost.calls
-        or any(
-            not call.model_id.startswith(("global.anthropic.", "global.openai.", "us."))
-            for call in result.cost.calls
-        )
-        or result.execution_source != "current_run"
+        or not valid_calls
+        or result.execution_source not in ({"llm_replay"} if replay else {"current_run"})
+        or replay
+        and (result.cost.external_calls != 0 or not recorded_llm_usage)
     ):
         raise ValueError("demo_cache_requires_actual_bedrock_and_docker_sample_result")
     destination = root / sample
@@ -117,7 +128,14 @@ def save_cache(
         },
         "result": snapshot,
         "events": events,
-        "provenance": "Actual Bedrock responses and Docker sample gate; historical result",
+        "provenance": (
+            "Historical Bedrock responses replayed with identical request hashes; "
+            "current Docker sample gate; no new Bedrock calls"
+            if replay
+            else "Actual Bedrock responses and Docker sample gate; historical result"
+        ),
+        "llm_execution_source": "llm_replay" if replay else "current_run",
+        "recorded_llm_usage": recorded_llm_usage,
     }
     assert_public(json.dumps(manifest, ensure_ascii=False))
     for name, text in payloads.items():
@@ -231,7 +249,17 @@ def try_restore(
     result.timings_s = {"total": time.monotonic() - started}
     payloads["gate-report.json"] = result.gate_report.model_dump_json(indent=2) + "\n"
     payloads["cost.json"] = result.cost.model_dump_json(indent=2) + "\n"
+    # The mandatory seven-file contract includes this via changes.diff; cache materializes it too.
+    from ai.transform.dockerfile import harden_dockerignore
+
     output.mkdir(parents=True, exist_ok=True)
+    source = RepoView(repo)
+    _write_output(
+        output / ".dockerignore",
+        harden_dockerignore(
+            source.read(".dockerignore") if ".dockerignore" in source.files() else ""
+        ),
+    )
     for name, text in payloads.items():
         _write_output(output / name, text)
     write_json(
@@ -243,6 +271,8 @@ def try_restore(
             "engine_hash": manifest["engine_hash"],
             "historical_gate_status": "passed",
             "external_calls": 0,
+            "llm_execution_source": manifest.get("llm_execution_source", "current_run"),
+            "recorded_llm_usage": manifest.get("recorded_llm_usage"),
             "historical_timings_s": manifest["result"]["timings_s"],
         },
     )

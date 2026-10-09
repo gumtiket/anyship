@@ -29,3 +29,15 @@
 - [ ] 게이트 통과만으로 전체 기능·배포 준비 완료를 표시하지 않는다. 현재 `pr_eligible=false`다.
 
 참고할 공식 요금 페이지는 [Lambda](https://aws.amazon.com/lambda/pricing/), [EC2](https://aws.amazon.com/ec2/pricing/on-demand/), [RDS PostgreSQL](https://aws.amazon.com/rds/postgresql/pricing/)이다. 이 링크가 현재 테이블 숫자의 검증 근거는 아니다.
+
+
+## 명세 검토 후 C 확인
+
+- [ ] env_policy.py의 프로세스/AWS/DOCKER/Lambda 거부 목록을 어댑터에도 공유한다.
+- [ ] 실제 app 예약어·A 식별자를 합친 이름 길이 63자 이내·이름 충돌 정책을 확정한다.
+- [ ] secret/generate/value 세 경우와 별도 secrets 인자를 확정한다. 생성 SECRET_KEY는 한 번 만들고 재사용한다.
+- [ ] URL·사용자/생성 시크릿·시스템 주입 후 전체 UTF-8 key/value 합계가 4KB 이내인지 검사한다.
+- [ ] 후보 25/30초는 서버리스 가능, 31초는 EC2, timeout_s는 1~30이다. override 정책과 실제 C 범위를 확인한다.
+- [ ] object_storage를 명확히 거부, public ingress만 허용, profile은 MVP에서 무시한다.
+- [ ] release.migrate는 이미지 내부·앱 DB 계정·시간 제한으로만 실행하며 호스트 셸을 사용하지 않는다.
+- [ ] source.commit 참고와 실제 이미지 식별자를 구분하고 검증 이미지/배포 이미지의 관계를 확정한다.

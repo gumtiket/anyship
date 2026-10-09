@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+from tempfile import mkdtemp
 
 from ai.golden import core_result
 from ai.llm import BedrockClient
@@ -21,6 +22,9 @@ def main() -> int:
     parser.add_argument("--fixtures", type=Path, default=DEFAULT_FIXTURES)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
+    (root / "out").mkdir(exist_ok=True)
+    output = Path(mkdtemp(prefix="golden-refresh-", dir=root / "out"))
+    print(f"검토용 결과: {output}")
     failed = False
     for name in ("todo", "todo-scheduler"):
         repo = root / "samples" / name
@@ -31,7 +35,7 @@ def main() -> int:
         )
         result = run_analysis(
             repo,
-            out_dir=root / "out/golden-refresh" / name,
+            out_dir=output / name,
             source_repo=f"sample://{name}",
             llm=client,
             decision_llm=client,
@@ -48,9 +52,7 @@ def main() -> int:
                 print(f"{name}: 의도한 골든 기준 저장")
             elif not path.exists() or json.loads(path.read_text()) != actual:
                 failed = True
-                print(
-                    f"{name}: 골든 기준 차이. out/golden-refresh를 검토한 뒤 --accept로 반영하세요."
-                )
+                print(f"{name}: 골든 기준 차이. {output}를 검토한 뒤 --accept로 반영하세요.")
             else:
                 print(f"{name}: 기존 골든 일치")
         finally:

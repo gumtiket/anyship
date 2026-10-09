@@ -2,6 +2,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ai.credentials import credential_urls
+from ai.spec.env_policy import (
+    APP_NAME,
+    DENIED_NAMES,
+    ENV_NAME,
+    MAX_ENV_BYTES,
+    allowed_name,
+    known_env_bytes,
+)
+
 
 class SpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
@@ -18,10 +28,62 @@ class Build(SpecModel):
 
 
 class Environment(SpecModel):
-    name: str = Field(pattern=r"^[A-Z_][A-Z0-9_]*$")
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        allow_inf_nan=False,
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"secret": {"const": True}}, "required": ["secret"]},
+                    "then": {"properties": {"value": {"type": "null"}}},
+                    "else": {"required": ["value"], "properties": {"value": {"type": "string"}}},
+                },
+                {
+                    "if": {"properties": {"generate": {"const": True}}, "required": ["generate"]},
+                    "then": {"required": ["secret"], "properties": {"secret": {"const": True}}},
+                },
+                {
+                    "if": {"properties": {"name": {"pattern": "_URL$"}}, "required": ["name"]},
+                    "then": {"properties": {"generate": {"const": False}}},
+                },
+            ]
+        },
+    )
+    name: str = Field(
+        pattern=ENV_NAME,
+        max_length=128,
+        json_schema_extra={
+            "not": {
+                "anyOf": [{"enum": sorted(DENIED_NAMES)}, {"pattern": "^(AWS_|DOCKER_|LAMBDA_)"}]
+            }
+        },
+    )
     secret: bool = False
     generate: bool = False
-    value: str | None = None
+    value: str | None = Field(
+        default=None,
+        max_length=4096,
+        json_schema_extra={"not": {"type": "string", "pattern": r"[\r\n\x00]"}},
+    )
+
+    @model_validator(mode="after")
+    def safe_configuration(self):
+        if not allowed_name(self.name):
+            raise ValueError("environment_name_forbidden")
+        if self.secret and self.value is not None:
+            raise ValueError("secret_value_forbidden")
+        if not self.secret and self.value is None:
+            raise ValueError("environment_value_required")
+        if self.generate and (not self.secret or self.name.endswith("_URL")):
+            raise ValueError("environment_generation_forbidden")
+        if self.value is not None and (
+            credential_urls(self.value)
+            or len(self.value.encode()) > MAX_ENV_BYTES
+            or any(c in self.value for c in "\r\n\x00")
+        ):
+            raise ValueError("environment_value_unsafe")
+        return self
 
 
 class BackingService(SpecModel):
@@ -62,18 +124,41 @@ class Release(SpecModel):
 
 
 class DeploySpec(SpecModel):
-    app: str
+    app: str = Field(pattern=APP_NAME)
     source: Source
     build: Build = Field(default_factory=Build)
     port: Literal[8080] = 8080
     healthcheck: Literal["/healthz"] = "/healthz"
-    ingress: Literal["public", "internal"] = "public"
+    ingress: Literal["public"] = "public"
     env: list[Environment]
-    backing_services: list[BackingService]
+    backing_services: list[BackingService] = Field(
+        json_schema_extra={
+            "not": {
+                "contains": {
+                    "properties": {"type": {"const": "object_storage"}},
+                    "required": ["type"],
+                }
+            }
+        }
+    )
     workload: Workload
     processes: Processes = Field(default_factory=Processes)
     release: Release | None = None
     profile: Literal["dev", "prod"] = "dev"
+
+    @model_validator(mode="after")
+    def environment_contract(self):
+        if any(b.type == "object_storage" for b in self.backing_services):
+            raise ValueError("object_storage_mvp_unsupported")
+        names = [e.name for e in self.env] + [b.bind_as for b in self.backing_services]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate_environment_binding")
+        values = {e.name: e.value or "" for e in self.env}
+        values.update({b.bind_as: "" for b in self.backing_services})
+        values["PORT"] = str(self.port)
+        if known_env_bytes(values) > MAX_ENV_BYTES:
+            raise ValueError("environment_total_size_exceeded")
+        return self
 
 
 class SpecProposal(SpecModel):

@@ -1,3 +1,26 @@
+--- /dev/null
++++ b/.dockerignore
+@@ -0,0 +1,20 @@
++.git
++.venv
++venv
++__pycache__
++*.py[cod]
++*.db
++*.sqlite*
++.[eE][nN][vV]*
++.aws
++.ssh
++*.pem
++*.key
++*.log
++out
++output
++.pytest_cache
++.ruff_cache
++Dockerfile*
++VIOLATIONS.json
++*.expected.json
 --- a/app/db.py
 +++ b/app/db.py
 @@ -1,9 +1,10 @@

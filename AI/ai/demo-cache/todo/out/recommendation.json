@@ -31,7 +31,9 @@
   },
   "needs_confirmation": [
     "tfvars_schema",
-    "cost_table"
+    "cost_table",
+    "env_policy",
+    "app_reserved_names"
   ],
   "warnings": [
     {

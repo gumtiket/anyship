@@ -41,7 +41,7 @@ out/
   cost.json
 ```
 
-진단은 원본 기준이며 변경안 반영 여부는 `transformation.addressed_ids/deferred_ids`로 구분한다. 자체 샘플의 위반 6개 중 4개를 제안에 반영하고, 파일 저장 전환과 미확인 의존성 버전 고정은 보류한다. `partial`을 전체 준수로 표시하지 않는다.
+진단은 원본 기준이며 변경안 반영 여부는 `transformation.addressed_ids/deferred_ids`로 구분한다. 자체 샘플의 위반 6개 중 4개를 제안에 반영하고 (수정 파일 5개에는 .dockerignore가 포함됨), 파일 저장 전환과 미확인 의존성 버전 고정은 보류한다. `partial`을 전체 준수로 표시하지 않는다.
 
 `--save-llm-trace`는 `llm-trace.md/json`, `llm-comparison.json`을 추가한다. 마스킹한 프롬프트·응답·파싱·실제 모델·토큰·규칙 차이를 읽을 수 있다. 모든 시크릿 패턴을 탐지하는 보장은 없다. 트레이스/실행 결과는 Git에 넣지 않는다.
 
@@ -116,7 +116,7 @@ Dockerfile은 Python 3.12-slim, LWA 1.1.0, PORT=8080, readiness `/healthz`를 �
 
 ## 추천과 임시 인프라 계약
 
-선택 순서는 onprem 대상 → scheduler → websocket → 최대 요청 시간 후보가 25초 초과 → 짧은 요청이다. 각각 onprem / aws-always-on / aws-always-on / aws-always-on / aws-serverless다. 25초는 배치 규칙이며 플랫폼 제한이 아니다. 최대 요청 시간 기본 후보 10초는 실측값이 아니다.
+선택 순서는 onprem 대상 → scheduler → websocket → 긴 요청 신호 또는 명시된 요청 시간 후보가 30초 초과 → 짧은 요청이다. 각각 onprem / aws-always-on / aws-always-on / aws-always-on / aws-serverless다. 30초는 팀 MVP 계약이며 AWS 플랫폼 자체 제한이 아니다. 기준과 tfvars 범위는 tfvars_schema.py에 모아 두었다. 최대 요청 시간 기본 후보 10초는 실측값이 아니다.
 
 FAST는 근거 문장만 작성한다. 다른 세트를 주장하면 재생성 후 규칙 템플릿으로 대체한다. 설명의 모든 사실 오류를 자동 검증하는 기능은 없다. C 확인 전 변수명/범위/default는 `src/ai/spec/tfvars_schema.py`, 단가/가정은 `src/ai/spec/cost_table.py` 한 곳에서 관리한다. Lambda와 EC2 Compose 변수 모델을 나누고 범위 오류는 클램프 없이 경고+기본값 대체다.
 
@@ -126,7 +126,7 @@ FAST는 근거 문장만 작성한다. 다른 세트를 주장하면 재생성 �
 
 ## 검증과 남은 작업
 
-로컬 P5 기준 기본 테스트 195 passed / 외부 연동 5 skipped, 실제 Docker 선택 테스트 3 passed다. 실제 FAST Haiku 4.5 + Docker는 todo=aws-serverless / todo-scheduler=aws-always-on으로 끝까지 검증했다. 실제 STRONG 생성 복구 품질은 미검증이며, 복구 루프는 Fake 수정안+실제 Docker로 검증했다. 이력 결과를 이 저장소에 포함하지 않으므로 새 환경에서 위 명령으로 재현한다.
+로컬 P5 기준 기본 테스트 195 passed / 외부 연동 5 skipped, 실제 Docker 선택 테스트 3 passed다. 실제 FAST Haiku 4.5 + Docker는 todo=aws-serverless / todo-scheduler=aws-always-on으로 끝까지 검증했다. 이 수치는 P5 당시 결과다. 최신 수정 후 기본 테스트는 280 passed / 외부 연동 5 skipped다. 실제 STRONG 로그 변환 한 사례도 검증했으며 복잡한 복구 품질은 추가 확인 대상이다. 복구 루프는 Fake 수정안+실제 Docker로 검증했다. 검토한 샘플 캐시/fixture 이외의 개인 이력은 포함하지 않으며 새 환경에서 위 명령으로 재현한다.
 
 P6의 두 샘플 골든 회귀와 사전 실행 캐시를 구현했다. C 계약 확정과 A의 권한 확인된 코드 자료 제공·AIProvider 연결은 남아 있다. 게이트 통과는 샘플 기동/CRUD 범위의 증거이며 전체 기능·PR 승인·클라우드 배포 준비 완료를 뜻하지 않는다.
 
@@ -144,7 +144,7 @@ ai/.venv/bin/python -m ai analyze samples/todo --llm record --no-gate --out out/
 ai/.venv/bin/python ai/scripts/refresh_golden.py
 # 의도한 프롬프트/스키마 변경 후 실제 재기록. 유료 호출이며 기준은 자동 덮어쓰지 않는다.
 ai/.venv/bin/python ai/scripts/refresh_golden.py --record
-# out/golden-refresh의 diff/명세를 검토한 뒤 명시적으로 기준을 갱신한다.
+# 스크립트가 출력한 새 golden-refresh 디렉터리의 diff/명세를 검토한 뒤 기준을 갱신한다.
 ai/.venv/bin/python ai/scripts/refresh_golden.py --accept
 ```
 
@@ -189,3 +189,44 @@ ai/.venv/bin/python -m pytest -m docker ai/tests -v
 [서비스 연결 문서](../docs/integration-for-service.md)와 [인수인계 체크리스트](../docs/handoff-checklist.md)를 따른다. C 계약/단가, 서비스 서버 Docker/플랫폼, 웹 AIProvider 연결, 실제 STRONG 복구 품질과 운영 데이터/롤백은 별도 확인이 남아 있다.
 
 2026-10-09 P6 완료 검증: 기본 219 passed / 외부 연동 5 skipped, P6 추가 24 passed, ruff 통과. 실제 사전 실행은 두 샘플 모두 Docker/Postgres 범위 통과다. 캐시 저장 검사 수정 전의 성공 분석까지 포함한 실제 사용은 총 6회, 입력 12,317 / 출력 4,650토큰이며 비용 단가는 미확정이다. 캐시에는 최종 성공 실행만 포함하고 전체 사용 집계/개인 trace는 out에 별도 보존했다.
+
+
+## 2026-10-09 독립 검토 후 수정
+
+함수와 CLI의 out은 요청별 새 디렉터리여야 한다. 비어 있지 않은 out은 호출 전에 거부한다.
+내부 임시 디렉터리에서 전체 결과를 완성한 뒤 한 번에 게시하며 예외 시 임시 컨텍스트도 정리한다.
+CLI/함수의 `--app-name`/`app_name`, `--max-request-seconds`/`max_request_seconds`는 A 또는 사용자의 명시 입력이다.
+LLM 제안으로 요청 시간·세트·ingress를 바꾸지 않는다. 기본 로컬 source는 개인 절대 경로 대신 `local://앱이름`이다.
+A는 실제 GitHub 주소와 커밋을 source_repo/commit으로 전달한다. 이름의 예약어·최종 식별자 충돌은 A/C 확인이 필요하다.
+
+환경변수는 일반 값/템플릿에서 추출한 생성 대상 SECRET_KEY/사용자 제공 비밀로 구분한다.
+PORT·프로세스 제어·AWS/DOCKER/Lambda 변수, 중복 이름, 줄바꿈·NUL·알려진 자격 증명 URL 값을 검증한다.
+B는 알려진 UTF-8 key/value 크기를 검증하고 C는 DB URL·시크릿·시스템 주입 후 전체를 다시 검증한다.
+DATABASE_URL은 임의 생성하지 않으며 기존 외부 DB 종류/자원을 추측하지 않는다.
+`needs_confirmation`에 env_policy/app_reserved_names와 필요한 사용자 입력 항목을 함께 표시한다.
+
+직접 sqlite3/aiosqlite 연결, 함수 인자/Authorization/URL/JSON 비밀을 검사한다.
+FastAPI의 Starlette 보조 import와 독립 Starlette 앱을 구분한다. 누락·빈 의존성 선언을 진단하고,
+루트 requirements.txt가 없는 형식/민감한 패키징 입력은 명세 생성을 보류한다.
+`ok`는 현 규칙에서 위반을 찾지 못했다는 뜻이며 전체 준수를 보장하지 않는다.
+
+`.dockerignore`는 파일 7종을 늘리지 않고 changes.diff에 포함한다. 일반 출력과 캐시 복원에도 보조 파일로 제공한다.
+A는 diff의 이 변경을 포함해 PR/빌드 컨텍스트를 구성한다. 기존 ignore 패턴은 보존하며 안전 제외를 마지막에 추가한다.
+MVP ingress는 public, object_storage는 명세에서 거부, profile은 메타데이터이며 C가 무시하는 계약을 확인한다.
+
+기본 데모 캐시는 최신 실제 FAST Bedrock 호출과 Docker 검증 결과다. 상세 사용량과 STRONG 검증 범위는 수정 요약에 기록한다.
+
+### 기존 실제 응답으로 캐시 검증
+
+```sh
+# 동일 요청 해시의 기존 Bedrock 응답 + 지금 실행하는 Docker/Postgres 검증. 새 AWS 호출은 없음.
+ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm replay
+```
+
+자동으로 실패한 실제 분석을 재생으로 바꾸지 않는다. 위 모드는 개발자가 명시적으로 고른다.
+캐시 provenance의 llm_execution_source=llm_replay와 recorded_llm_usage를 표시한다.
+이 replay 모드로 생성한 cache cost는 과거의 재생 실행 사용량(새 AWS 토큰/비용 0)이고, recorded_llm_usage는 별도의 원래 Bedrock 과거 사용량이다.
+그 원래 비용 null을 0원으로 바꾸지 않는다. 캐시 복원 시 현재 gate는 skipped이고 과거 Docker passed만 표시한다.
+
+검토 결함/증거와 남은 계약은 [수정 요약](../docs/review-fix-summary.md),
+A/C의 실행 조건은 [배포 명세 계약](deliverables/deploy-spec-contract.md)을 참고한다.

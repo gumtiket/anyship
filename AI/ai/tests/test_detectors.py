@@ -69,7 +69,11 @@ def test_pyproject_dependency_detection(tmp_path):
 def test_sqlite_is_not_counted_twice_and_secret_values_are_not_exported(tmp_path):
     repo = view(tmp_path, 'URL = "sqlite:///./todo.db"\nSECRET_KEY = "dummy-secret-do-not-use"')
     findings = detect(repo)
-    assert {v.rule for v in findings} == {"sqlite_usage", "hardcoded_secret"}
+    assert {v.rule for v in findings} == {
+        "sqlite_usage",
+        "hardcoded_secret",
+        "missing_dependency_declaration",
+    }
     assert "dummy-secret-do-not-use" not in json.dumps(
         [v.model_dump(mode="json") for v in findings]
     )
@@ -96,6 +100,7 @@ def test_local_write_is_a_review_candidate_and_mkdir_is_not_a_finding(tmp_path):
             'p.parent.mkdir()\np.write_text("hello")',
         )
     )
+    findings = [v for v in findings if v.rule == "local_file_write"]
     assert len(findings) == 1
     assert findings[0].confidence == "needs_review"
     assert findings[0].change_class == "risky"

@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+from tempfile import mkdtemp
 
 from ai.gate.runner import DockerCliRunner, FakeRunner
 from ai.llm import BedrockClient, FakeLLMClient
@@ -20,6 +21,8 @@ def main() -> int:
     output = Path(args.out).resolve()
     if output.is_relative_to(root / "samples"):
         raise ValueError("측정 출력은 샘플 밖에 지정하세요.")
+    output.mkdir(parents=True, exist_ok=True)
+    output = Path(mkdtemp(prefix="measurement-", dir=output))
     rows = []
     for name, expected in (("todo", "aws-serverless"), ("todo-scheduler", "aws-always-on")):
         client = (

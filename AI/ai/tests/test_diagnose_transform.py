@@ -196,7 +196,7 @@ def test_non_dummy_secret_file_is_masked_and_deferred(tmp_path):
     assert "main.py" in masker.blocked_files
     assert fake_value not in masker.summaries(repo)["main.py"]
     diff, report = propose(repo, diagnosis(repo))
-    assert not diff
+    assert "main.py" not in report.changed_files
     assert "secret_file_deferred" in {w.code for w in report.warnings}
     assert fake_value not in report.model_dump_json()
 
@@ -266,7 +266,7 @@ def test_patch_retries_broken_then_success(tmp_path):
 
 def test_patch_exhaustion_tries_individual_target(tmp_path):
     repo = small_repo(tmp_path, 'import os, uvicorn\nuvicorn.run("main:app",port=8000)\n')
-    target = detect(repo)[0]
+    target = next(v for v in detect(repo) if v.rule == "fixed_port")
     fake = FakeLLMClient(
         [json.dumps({"diff": f"bad{i}", "violation_ids": [target.id]}) for i in range(4)]
     )
@@ -382,7 +382,7 @@ def test_llm_patch_rejects_unrequested_behavior(tmp_path, extra, expected):
 def test_llm_cannot_claim_a_violation_fixed_when_only_comment_changes(tmp_path):
     repo = small_repo(tmp_path, 'import uvicorn\nuvicorn.run("main:app",port=8000)\n')
     before = source_files(repo)
-    target = detect(repo)[0]
+    target = next(v for v in detect(repo) if v.rule == "fixed_port")
     after = {"main.py": before["main.py"] + "# no actual fix\n"}
     fake = FakeLLMClient(
         [json.dumps({"diff": make_diff(before, after), "violation_ids": [target.id]})] * 4

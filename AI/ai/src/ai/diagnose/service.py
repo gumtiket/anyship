@@ -100,7 +100,21 @@ def enrich(
         violation.description, violation.impact = RULE_EXPLANATIONS.get(
             violation.rule, ("추가 검토 대상입니다.", "영향을 확인해야 합니다.")
         )
+        if violation.rule == "sqlite_usage" and "직접 연결" in violation.evidence:
+            violation.description = "SQLite 직접 연결 호출을 발견했습니다."
+        if violation.rule == "hardcoded_secret" and not violation.evidence.startswith(
+            "인증 정보 이름의 변수"
+        ):
+            violation.description = "설정·함수 인자·URL에서 자격 증명 리터럴을 발견했습니다."
     result.factor_reviews = review_factors(result)
+    if not any(w.code == "rule_assessment_scope" for w in result.warnings):
+        result.warnings.append(
+            WarningItem(
+                code="rule_assessment_scope",
+                message="ok는 현재 규칙에서 위반을 찾지 못했다는 뜻입니다. "
+                "전체 준수나 실행 안전성을 보장하지 않습니다.",
+            )
+        )
     if llm is None or result.support_grade == "unsupported":
         return result
     payload = {

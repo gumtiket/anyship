@@ -15,6 +15,7 @@ from ai.gate.runner import ContainerRunner
 from ai.gate.service import run_gate, safe_log
 from ai.llm.base import LLMClient
 from ai.models import GateReport, OutputModel
+from ai.output_session import register_context
 from ai.security import SourceMasker
 from ai.spec.models import DeploySpec
 from ai.stages import LogFn, Stage
@@ -95,6 +96,7 @@ def repair_context(context: BuildContext, proposal: FailureAnalysis) -> BuildCon
     except BaseException:
         result.cleanup()
         raise
+    register_context(result)
     return result
 
 

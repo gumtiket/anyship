@@ -34,3 +34,15 @@ ai/.venv/bin/ruff format --check ai
 - [ ] 실제 배포할 이미지로 검증한다. 이미지 재빌드 동일성, 전체 기능·부하, 운영 마이그레이션/롤백/데이터 이전을 샘플 기동·CRUD 검증으로 대신하지 않는다.
 
 골든은 고정 샘플 회귀다. 독립 holdout 성능, 모든 시크릿의 마스킹, 실제 STRONG 수정안 품질, 운영 배포 완료의 증거가 아니다.
+
+
+## 독립 검토 후 추가 확인
+
+- [ ] 요청마다 새 out·새 클라이언트, 현재 결과/예외와 오래된 파일을 구분한다.
+- [ ] diff의 .dockerignore를 PR/실제 빌드에 포함하고 원래 패턴도 보존한다.
+- [ ] 사용자 제공 비밀과 시스템 생성 SECRET_KEY를 구분하고 생성 값은 다음 배포에서 재사용한다.
+- [ ] 기존 DATABASE_URL은 자원/주소를 추측 생성하지 않고 사용자에게 확인한다.
+- [ ] ENV 거부 목록/예약어·최종 UTF-8 4KB·30초 경계를 C와 확인한다.
+- [ ] pyproject 분석과 실제 패키징 지원을 구분하고 partial을 완료로 표시하지 않는다.
+- [ ] replay+새 Docker 캐시는 llm_execution_source와 recorded_llm_usage를 보이고 실제 신규 LLM 성공으로 표시하지 않는다.
+- [ ] 원래 비용 null, 현재 외부 호출 0, 과거 Docker passed와 현재 gate skipped를 구분한다.

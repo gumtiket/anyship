@@ -16,8 +16,11 @@ __pycache__
 *.py[cod]
 *.db
 *.sqlite*
-.env
-.env.*
+.[eE][nN][vV]*
+.aws
+.ssh
+*.pem
+*.key
 *.log
 out
 output
@@ -27,6 +30,12 @@ Dockerfile*
 VIOLATIONS.json
 *.expected.json
 """
+
+
+def harden_dockerignore(existing: str = "") -> str:
+    if existing.endswith(DOCKERIGNORE):
+        return existing
+    return (existing.rstrip() + "\n" if existing else "") + DOCKERIGNORE
 
 
 class DockerInputs(BaseModel):

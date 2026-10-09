@@ -157,7 +157,8 @@ def run_gate(
         for attempt in range(timeout_s):
             try:
                 text = request(f"health-{attempt}", spec.healthcheck)
-                if json.loads(text).get("status") != "ok":
+                payload = json.loads(text)
+                if not isinstance(payload, dict) or payload.get("status") != "ok":
                     raise ValueError("health_payload_invalid")
                 return text
             except (RunnerError, ValueError) as error:
@@ -282,7 +283,7 @@ def run_gate(
         report.status = "passed" if runner.real else "skipped"
         if not runner.real:
             report.reason = "FakeRunner 순서/보안 검증만 완료. 실제 컨테이너 검증 아님."
-    except (RunnerError, ValueError, OSError, KeyError, TypeError) as error:
+    except (RunnerError, ValueError, OSError, KeyError, TypeError, AttributeError) as error:
         current.status = "failed"
         report.reason = safe_log(str(error), sensitive)
         if app_name in containers:

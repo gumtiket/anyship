@@ -1,12 +1,14 @@
 import ast
 import hashlib
 import json
+import re
 from importlib.resources import files
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 from pydantic import Field
 
+from ai.credentials import credential_urls
 from ai.detectors import RepoView, detect, detect_framework, detect_signals
 from ai.detectors.repo import aliases, qualified
 from ai.llm.base import LLMClient
@@ -111,7 +113,7 @@ def detect_framework_from_sources(source: dict[str, str]) -> str | None:
         return detect_framework(RepoView(workspace.root)).entrypoint
 
 
-def env_vars(candidate: dict[str, str]) -> list[EnvVar]:
+def env_vars(candidate: dict[str, str], masker: SourceMasker | None = None) -> list[EnvVar]:
     found = {}
     for file, source in candidate.items():
         if not file.endswith(".py"):
@@ -138,16 +140,32 @@ def env_vars(candidate: dict[str, str]) -> list[EnvVar]:
                 and isinstance(node.args[0], ast.Constant)
             ):
                 name = node.args[0].value
-                if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
-                    default = str(node.args[1].value) if node.args[1].value is not None else None
+                node_default = (
+                    node.args[1]
+                    if len(node.args) > 1
+                    else next((k.value for k in node.keywords if k.arg == "default"), None)
+                )
+                if isinstance(node_default, ast.Constant):
+                    default = str(node_default.value) if node_default.value is not None else None
             if isinstance(name, str) and name.isidentifier() and name.upper() == name:
-                secret = credential_name(name) or name == "DATABASE_URL"
+                secret = (
+                    credential_name(name)
+                    or name in {"DATABASE_URL", "REDIS_URL", "STORAGE_URL"}
+                    or bool(default and credential_urls(default))
+                    or bool(default and re.match(r"(?i)^Bearer\s+\S+", default))
+                    or bool(default and masker and masker.contains_sensitive(default))
+                )
                 item = EnvVar(
                     name=name, secret=secret, required=required, default=None if secret else default
                 )
                 previous = found.get(name)
-                if previous is None or required:
+                if previous is None:
                     found[name] = item
+                else:
+                    previous.secret |= item.secret
+                    previous.required |= item.required
+                    if previous.secret or previous.required or previous.default != item.default:
+                        previous.default = None
     return [found[name] for name in sorted(found)]
 
 
@@ -330,14 +348,17 @@ def propose(
     report.changed_files = sorted(
         name for name in candidate if candidate[name] != original.get(name)
     )
-    report.env_vars = env_vars(candidate)
+    generated = {e.name for e in report.env_vars if e.generate}
+    report.env_vars = env_vars(candidate, masker)
+    for variable in report.env_vars:
+        variable.generate = variable.name in generated
     if masker.contains_sensitive(diff):
         report.status = "failed"
         report.changed_files = []
         report.addressed_ids = []
         report.deferred_ids = sorted(v.id for v in diagnosis.violations)
         report.migrate_command = None
-        report.env_vars = env_vars(original)
+        report.env_vars = env_vars(original, masker)
         report.warnings.append(
             WarningItem(
                 code="sensitive_diff_blocked",

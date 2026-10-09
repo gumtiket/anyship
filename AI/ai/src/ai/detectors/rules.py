@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from packaging.requirements import InvalidRequirement, Requirement
 
+from ai.credentials import credential_name, secret_literals
 from ai.detectors.repo import RepoView, aliases, qualified
 from ai.models import Violation
 
@@ -16,6 +17,7 @@ RULE_INFO = {
     "local_file_write": (6, False, "risky"),
     "unpinned_dependency": (2, False, "safe"),
     "hardcoded_db_url": (4, True, "safe"),
+    "missing_dependency_declaration": (2, False, "safe"),
 }
 SQLITE = re.compile(r"^sqlite(?:\+[a-z0-9_]+)?://", re.I)
 OTHER_DB = re.compile(r"^(?:postgres(?:ql)?|mysql|mariadb|mssql|oracle)(?:\+[a-z0-9_]+)?://", re.I)
@@ -55,9 +57,25 @@ def _ast_rule(
 
 
 def detect_sqlite(repo: RepoView) -> list[Violation]:
-    return _url_rule(
+    found = _url_rule(
         repo, "sqlite_usage", SQLITE, "SQLite DB URL을 코드/설정에서 발견했습니다. 값은 생략합니다."
     )
+    direct = _ast_rule(
+        repo,
+        "sqlite_usage",
+        lambda node, imports: (
+            "SQLite 직접 연결 호출을 발견했습니다. 파일 DB는 외부 자원 전환 검토가 필요합니다."
+            if isinstance(node, ast.Call)
+            and qualified(node.func, imports) in {"sqlite3.connect", "aiosqlite.connect"}
+            and not (
+                node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == ":memory:"
+            )
+            else None
+        ),
+    )
+    return list({(v.file, v.line): v for v in [*found, *direct]}.values())
 
 
 def detect_db_url(repo: RepoView) -> list[Violation]:
@@ -78,7 +96,8 @@ def _url_rule(repo: RepoView, rule: str, pattern: re.Pattern, evidence: str) -> 
             evidence
             if isinstance(node, ast.Constant)
             and isinstance(node.value, str)
-            and pattern.search(node.value)
+            and (match := pattern.search(node.value))
+            and match.end() < len(node.value)
             else None
         ),
     )
@@ -87,37 +106,40 @@ def _url_rule(repo: RepoView, rule: str, pattern: re.Pattern, evidence: str) -> 
             for number, text in enumerate(repo.read(file).splitlines(), 1):
                 if text.lstrip().startswith("#"):
                     continue
-                if any(pattern.search(token.strip("'\"")) for token in re.split(r"[\s=]+", text)):
+                if any(
+                    (match := pattern.search(value := token.strip("'\"")))
+                    and match.end() < len(value)
+                    for token in re.split(r"[\s=]+", text)
+                ):
                     found.append(violation(rule, file, number, evidence))
     return found
 
 
 def detect_secrets(repo: RepoView) -> list[Violation]:
-    def check(node: ast.AST, _: dict[str, str]) -> str | None:
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            return None
-        value = node.value
-        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-        if (
-            not isinstance(value, ast.Constant)
-            or not isinstance(value.value, str)
-            or not value.value
-        ):
-            return None
-        for target in targets:
-            name = (
-                target.id
-                if isinstance(target, ast.Name)
-                else target.attr
-                if isinstance(target, ast.Attribute)
-                else ""
+    found = []
+    for file, tree in repo.modules():
+        assignments = {
+            n.value
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.Assign, ast.AnnAssign))
+            and isinstance(n.value, ast.Constant)
+            and any(
+                credential_name(getattr(t, "id", getattr(t, "attr", "")))
+                for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
             )
-            words = re.sub(r"([a-z])([A-Z])", r"\1_\2", name).lower().split("_")
-            if set(words) & {"secret", "password", "key", "token"}:
-                return "인증 정보 이름의 변수에 리터럴을 대입합니다. 값은 [REDACTED]입니다."
-        return None
-
-    return _ast_rule(repo, "hardcoded_secret", check)
+        }
+        for node in secret_literals(tree):
+            found.append(
+                violation(
+                    "hardcoded_secret",
+                    file,
+                    node.lineno,
+                    "인증 정보 이름의 변수에 리터럴을 대입합니다. 값은 [REDACTED]입니다."
+                    if node in assignments
+                    else "자격 증명 리터럴을 발견했습니다. 값은 [REDACTED]입니다.",
+                )
+            )
+    return list({(v.file, v.line): v for v in found}.values())
 
 
 def detect_file_log(repo: RepoView) -> list[Violation]:
@@ -193,6 +215,26 @@ def _unpinned(text: str) -> bool:
 
 def detect_dependencies(repo: RepoView) -> list[Violation]:
     result = []
+    if not any(
+        re.search(
+            r"(?:^|/)(?:requirements[^/]*\.txt|pyproject\.toml|Pipfile|setup\.py|setup\.cfg)$", file
+        )
+        and any(
+            line.strip() and not line.lstrip().startswith("#")
+            for line in repo.read(file).splitlines()
+        )
+        for file in repo.files()
+    ):
+        python = next((file for file in repo.files() if file.endswith(".py")), None)
+        if python:
+            result.append(
+                violation(
+                    "missing_dependency_declaration",
+                    python,
+                    1,
+                    "의존성 선언 파일이 없거나 비어 있습니다. 배포 전 의존성 선언이 필요합니다.",
+                )
+            )
     for file in repo.files():
         entries = []
         if re.search(r"(?:^|/)requirements[^/]*\.txt$", file):

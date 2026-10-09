@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Dockerfile/명세 제안에 쓸 LLM. bedrock은 추가 유료 호출",
     )
     analyze.add_argument("--source-repo", default=None)
+    analyze.add_argument("--app-name", default=None, help="A가 확정한 앱 이름 (3~31자 DNS 라벨)")
+    analyze.add_argument(
+        "--max-request-seconds", type=int, default=10, help="사용자/A의 요청 시간 후보; 실측값 아님"
+    )
     analyze.add_argument("--llm-fixtures", default=str(DEFAULT_FIXTURES))
     analyze.add_argument("--use-demo-cache", action="store_true")
     analyze.add_argument("--demo-cache-dir", default=None)
@@ -109,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
             no_gate=args.no_gate,
             compare_original=not args.no_compare,
             source_repo=args.source_repo,
+            app_name=args.app_name,
+            max_request_seconds=args.max_request_seconds,
             commit=args.commit,
             profile=args.profile,
             save_llm_trace=args.save_llm_trace,

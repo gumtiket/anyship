@@ -46,6 +46,7 @@ class EnvVar(OutputModel):
     secret: bool = False
     required: bool = False
     default: str | None = None
+    generate: bool = False  # Set only by a recognized template extraction, never by the LLM.
 
 
 class TransformReport(OutputModel):

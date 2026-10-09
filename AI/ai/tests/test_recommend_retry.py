@@ -32,10 +32,11 @@ def sample(tmp_path):
     [
         ("aws", None, 10, "aws-serverless", "short_request"),
         ("aws", None, 25, "aws-serverless", "short_request"),
-        ("aws", None, 26, "aws-always-on", "request_over_threshold"),
+        ("aws", None, 30, "aws-serverless", "short_request"),
+        ("aws", None, 31, "aws-always-on", "request_over_threshold"),
         ("aws", "scheduler", 10, "aws-always-on", "scheduler"),
         ("aws", "websocket", 10, "aws-always-on", "websocket"),
-        ("aws", "long_request", 30, "aws-always-on", "request_over_threshold"),
+        ("aws", "long_request", 30, "aws-always-on", "long_request_signal"),
         ("onprem", None, 10, "onprem", "target_onprem"),
         ("onprem", "scheduler", 100, "onprem", "target_onprem"),
     ],
@@ -278,7 +279,12 @@ def test_fake_complete_pipeline_and_pending_contract(tmp_path, name, expected):
     )
     try:
         assert result.recommendation.set == expected
-        assert result.recommendation.needs_confirmation == ["tfvars_schema", "cost_table"]
+        assert result.recommendation.needs_confirmation == [
+            "tfvars_schema",
+            "cost_table",
+            "env_policy",
+            "app_reserved_names",
+        ]
         assert result.recommendation.needs_approval
         assert result.recommendation.rationale_source == "llm"
         assert all((tmp_path / "out" / file).exists() for file in OUTPUT_NAMES)

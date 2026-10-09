@@ -6,6 +6,7 @@ from packaging.utils import canonicalize_name
 from ai.detectors.repo import aliases, qualified
 from ai.models import Diagnosis, EnvVar, TransformReport, WarningItem
 from ai.security import DUMMY_SECRET, SourceMasker, credential_name, edit_nodes
+from ai.transform.dockerfile import harden_dockerignore
 
 
 def has_psycopg2(requirements: str) -> bool:
@@ -58,6 +59,10 @@ def template_changes(
     sample_name: str | None,
 ) -> tuple[dict[str, str], TransformReport]:
     after = dict(before)
+    if ".dockerignore" not in masker.blocked_files:
+        existing = before.get(".dockerignore", "")
+        # Preserve existing ignore patterns but append mandatory exclusions last (after any !).
+        after[".dockerignore"] = harden_dockerignore(existing)
     environment = {}
     report = TransformReport(sample_name=sample_name)
     addressed = set()
@@ -97,7 +102,9 @@ def template_changes(
                     key = targets[0].id.upper()
                     edits.append((node.value, f'os.environ["{key}"]'))
                     required_imports.add("os")
-                    environment[key] = EnvVar(name=key, secret=True, required=True)
+                    environment[key] = EnvVar(
+                        name=key, secret=True, required=True, generate=key == "SECRET_KEY"
+                    )
                     rule = "hardcoded_secret"
             if isinstance(node, ast.Call):
                 name = qualified(node.func, imports)

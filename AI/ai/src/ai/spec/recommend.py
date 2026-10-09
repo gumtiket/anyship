@@ -9,9 +9,9 @@ from ai.models import Diagnosis, OutputModel, Recommendation, TransformReport, W
 from ai.security import SourceMasker
 from ai.spec.cost_table import CostAssumptions, estimate_monthly
 from ai.spec.models import DeploySpec
-from ai.spec.tfvars_schema import make_tfvars
+from ai.spec.tfvars_schema import MVP_REQUEST_LIMIT_SECONDS, make_tfvars
 
-REQUEST_THRESHOLD_SECONDS = 25  # Placement demo rule, not a claimed platform timeout limit.
+REQUEST_THRESHOLD_SECONDS = MVP_REQUEST_LIMIT_SECONDS
 SETS = ("aws-serverless", "aws-always-on", "onprem")
 
 
@@ -24,6 +24,8 @@ def select_set(target_env: str, spec: DeploySpec, diagnosis: Diagnosis) -> tuple
         return "aws-always-on", "scheduler"
     if spec.workload.websocket or any(s.name == "websocket" for s in diagnosis.signals):
         return "aws-always-on", "websocket"
+    if any(s.name == "long_request" for s in diagnosis.signals):
+        return "aws-always-on", "long_request_signal"
     if spec.workload.max_request_seconds > REQUEST_THRESHOLD_SECONDS:
         return "aws-always-on", "request_over_threshold"
     return "aws-serverless", "short_request"
@@ -136,6 +138,20 @@ def recommend(
         estimated_monthly_cost=amount,
         assumptions=assumptions,
         tfvars=variables.model_dump(mode="json", by_alias=True, exclude_none=True),
-        needs_confirmation=["tfvars_schema", "cost_table"],
+        needs_confirmation=["tfvars_schema", "cost_table", "env_policy", "app_reserved_names"]
+        + sorted(
+            {
+                w.code
+                for w in transformation.warnings
+                if w.code
+                in {
+                    "environment_value_required",
+                    "environment_name_forbidden",
+                    "environment_value_unsafe",
+                    "external_resource_required",
+                    "object_storage_mvp_unsupported",
+                }
+            }
+        ),
         warnings=warnings,
     )

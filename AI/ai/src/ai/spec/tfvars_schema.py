@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationIn
 from ai.spec.models import DeploySpec
 
 PENDING = "확인 필요(C 확정 전)"
+MVP_REQUEST_LIMIT_SECONDS = 30
 
 
 class CommonVars(BaseModel):
@@ -42,7 +43,11 @@ class ServerlessVars(CommonVars):
         default=256, alias="memory_mb", ge=128, le=3008, description=PENDING
     )
     request_timeout_seconds: int = Field(
-        default=30, alias="timeout_s", ge=1, le=900, description=PENDING
+        default=MVP_REQUEST_LIMIT_SECONDS,
+        alias="timeout_s",
+        ge=1,
+        le=MVP_REQUEST_LIMIT_SECONDS,
+        description=PENDING,
     )
 
 
@@ -76,7 +81,7 @@ def make_tfvars(
     if selected == "aws-serverless":
         # This branch only receives the short-request set. No guessed clamping of user values.
         values[model.model_fields["request_timeout_seconds"].alias] = max(
-            30, spec.workload.max_request_seconds
+            MVP_REQUEST_LIMIT_SECONDS, spec.workload.max_request_seconds
         )
     defaults = model.model_validate(values, context=context)
     try:

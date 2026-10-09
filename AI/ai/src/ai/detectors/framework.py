@@ -8,6 +8,7 @@ from ai.models import FrameworkDetection
 def detect_framework(repo: RepoView) -> FrameworkDetection:
     frameworks = set()
     entrypoints = []
+    independent_starlette = False
     for file, tree in repo.modules():
         if "tests" in PurePosixPath(file).parts or PurePosixPath(file).name.startswith("test_"):
             continue
@@ -19,6 +20,11 @@ def detect_framework(repo: RepoView) -> FrameworkDetection:
         )
         for node in tree.body:
             value = node.value if isinstance(node, (ast.Assign, ast.AnnAssign)) else None
+            if (
+                isinstance(value, ast.Call)
+                and qualified(value.func, imports) == "starlette.applications.Starlette"
+            ):
+                independent_starlette = True
             if isinstance(value, ast.Call) and qualified(value.func, imports) == "fastapi.FastAPI":
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
@@ -26,7 +32,11 @@ def detect_framework(repo: RepoView) -> FrameworkDetection:
                         module = str(PurePosixPath(file).with_suffix("")).replace("/", ".")
                         if all(part.isidentifier() for part in module.split(".")):
                             entrypoints.append(f"{module}:{target.id}")
-    if frameworks == {"fastapi"} and entrypoints:
+    if (
+        len(entrypoints) == 1
+        and not independent_starlette
+        and frameworks <= {"fastapi", "starlette"}
+    ):
         return FrameworkDetection(
             support_grade="supported",
             framework="fastapi",

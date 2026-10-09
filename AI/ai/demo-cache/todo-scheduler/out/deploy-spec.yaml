@@ -12,10 +12,6 @@ env:
   secret: false
   generate: false
   value: INFO
-- name: PORT
-  secret: false
-  generate: false
-  value: '8080'
 - name: SECRET_KEY
   secret: true
   generate: true

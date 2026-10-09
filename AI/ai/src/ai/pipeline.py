@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Literal
 
 import yaml
 
+from ai.credentials import credential_urls
 from ai.detectors import RepoView, detect, detect_framework, detect_signals
 from ai.diagnose import enrich
 from ai.gate.retry import run_with_retry
@@ -18,15 +19,17 @@ from ai.llm.cost import CostTracker
 from ai.llm.trace import TRACE_NAMES, TraceRecorder
 from ai.llm.tracked import TrackedLLM
 from ai.models import AnalysisResult, Diagnosis, GateReport, Recommendation, WarningItem
+from ai.output_session import isolated_output
 from ai.security import SourceMasker
 from ai.spec.cost_table import CostAssumptions
+from ai.spec.env_policy import APP_NAME, app_name_from_directory
 from ai.spec.recommend import recommend
 from ai.spec.service import generate_spec
 from ai.spec.tfvars_schema import CommonVars
 from ai.stages import LogFn, Stage, default_log
 from ai.transform import propose
 from ai.transform.context import prepare_context
-from ai.transform.dockerfile import DOCKERIGNORE, generate_dockerfile
+from ai.transform.dockerfile import generate_dockerfile, harden_dockerignore
 from ai.transform.workspace import Workspace, make_diff, source_files
 
 if TYPE_CHECKING:
@@ -57,6 +60,7 @@ def _write_output(path: Path, text: str) -> None:
             temporary.unlink(missing_ok=True)
 
 
+@isolated_output
 def run_analysis(
     repo_path: str | Path,
     *,
@@ -75,6 +79,8 @@ def run_analysis(
     image_reference: str | None = None,
     tfvars_overrides: dict | None = None,
     cost_assumptions: CostAssumptions | None = None,
+    app_name: str | None = None,
+    max_request_seconds: int = 10,
     no_gate: bool = False,
     compare_original: bool = True,
     use_demo_cache: bool = False,
@@ -112,9 +118,15 @@ def run_analysis(
         raise ValueError("원본 보호: 출력은 입력 레포와 분리된 디렉터리에 지정하세요.")
     if profile not in {"dev", "prod"}:
         raise ValueError("profile는 dev 또는 prod여야 합니다.")
+    if app_name is not None and not re.fullmatch(APP_NAME, app_name):
+        raise ValueError("app_name은 3~31자의 소문자 DNS 라벨이어야 합니다.")
+    if type(max_request_seconds) is not int or not 1 <= max_request_seconds <= 3600:
+        raise ValueError("max_request_seconds는 1~3600의 정수여야 합니다.")
     if commit is not None and not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
         raise ValueError("commit은 7~40자리 Git SHA여야 합니다.")
-    if source_repo is not None and re.search(r"://[^/]*@", source_repo):
+    if source_repo is not None and (
+        re.search(r"://[^/]*@", source_repo) or credential_urls(source_repo)
+    ):
         raise ValueError("source_repo에는 자격 증명을 넣을 수 없습니다.")
     # Reject symlinked files before writing any output into a user repository.
     output_names = (*OUTPUT_NAMES, *TRACE_NAMES) if save_llm_trace else OUTPUT_NAMES
@@ -142,6 +154,8 @@ def run_analysis(
                 tfvars_overrides=tfvars_overrides,
                 cost_assumptions=cost_assumptions,
                 compare_original=compare_original,
+                app_name=app_name,
+                max_request_seconds=max_request_seconds,
             ),
         )
         if cached is not None:
@@ -229,18 +243,29 @@ def run_analysis(
         with measured("transform"):
             diff, transformation = propose(view, diagnosis, tracked)
         with measured("packaging"):
-            if framework.support_grade == "supported" and transformation.status != "failed":
+            if (
+                framework.support_grade == "supported"
+                and transformation.status != "failed"
+                and "requirements.txt" in view.files()
+                and any(
+                    line.strip() and not line.lstrip().startswith("#")
+                    for line in view.read("requirements.txt").splitlines()
+                )
+                and "requirements.txt" not in masker.blocked_files
+                and ".dockerignore" not in masker.blocked_files
+            ):
                 dockerfile, docker_fallback = generate_dockerfile(
                     framework.entrypoint, artifact_tracked
                 )
                 spec, spec_fallback = generate_spec(
-                    repo.name,
-                    source_repo or str(repo_path),
+                    app_name or app_name_from_directory(repo.name),
+                    source_repo or f"local://{app_name or app_name_from_directory(repo.name)}",
                     commit,
                     profile,
                     diagnosis,
                     transformation,
                     artifact_tracked,
+                    max_request_seconds=max_request_seconds,
                 )
                 for code, fallback in (
                     ("dockerfile_llm_fallback", docker_fallback),
@@ -267,6 +292,14 @@ def run_analysis(
                             ),
                         )
                     )
+            elif framework.support_grade == "supported" and transformation.status != "failed":
+                packaging_warnings.append(
+                    WarningItem(
+                        code="dependency_packaging_unsupported",
+                        message="현재 패키징에는 안전한 루트 requirements.txt와 ignore 입력이 "
+                        "필요합니다. 조건이 충족되지 않아 빌드 명세를 보류합니다.",
+                    )
+                )
         with measured("recommendation"):
             recommendation = (
                 recommend(
@@ -285,6 +318,7 @@ def run_analysis(
                 if spec is not None
                 else Recommendation(
                     status="unsupported",
+                    needs_confirmation=["dependency_packaging"],
                     needs_approval=transformation.needs_approval,
                     warnings=list(transformation.warnings),
                 )
@@ -358,6 +392,7 @@ def run_analysis(
         if transformation.status == "failed" or gate.status == "failed"
         else "partial"
         if diagnosis.enrichment_status == "failed"
+        or (framework.support_grade == "supported" and spec is None)
         else "diagnosed"
         if framework.support_grade == "supported"
         else framework.support_grade,
@@ -403,7 +438,12 @@ def run_analysis(
         else "# unsupported: 명세 생성 생략\n",
     )
     if spec is not None:
-        _write_output(output / ".dockerignore", DOCKERIGNORE)
+        _write_output(
+            output / ".dockerignore",
+            harden_dockerignore(
+                view.read(".dockerignore") if ".dockerignore" in view.files() else ""
+            ),
+        )
         log(
             Stage.ANALYZING,
             f"Dockerfile lint·배포 명세 스키마 검증 완료. 게이트 결과: {gate.status}.",

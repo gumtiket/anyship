@@ -103,6 +103,10 @@
   ],
   "warnings": [
     {
+      "code": "rule_assessment_scope",
+      "message": "ok는 현재 규칙에서 위반을 찾지 못했다는 뜻입니다. 전체 준수나 실행 안전성을 보장하지 않습니다."
+    },
+    {
       "code": "llm_candidate_rejected",
       "message": "검사 범위/근거 위치가 유효하지 않은 LLM 후보를 제외했습니다."
     },
@@ -129,6 +133,10 @@
     {
       "code": "dependency_version_unknown",
       "message": "레포의 실제 사용 버전을 알 수 없어 버전 핀을 추측하지 않았습니다."
+    },
+    {
+      "code": "spec_llm_fallback",
+      "message": "LLM 제안 검증 실패로 고정 템플릿/규칙 기본값을 사용했습니다."
     }
   ],
   "framework": {
@@ -215,6 +223,7 @@
   "transformation": {
     "status": "partial",
     "changed_files": [
+      ".dockerignore",
       "app/db.py",
       "app/main.py",
       "app/migrate.py",
@@ -235,25 +244,29 @@
         "name": "DATABASE_URL",
         "secret": true,
         "required": true,
-        "default": null
+        "default": null,
+        "generate": false
       },
       {
         "name": "LOG_LEVEL",
         "secret": false,
         "required": false,
-        "default": "INFO"
+        "default": "INFO",
+        "generate": false
       },
       {
         "name": "PORT",
         "secret": false,
         "required": false,
-        "default": "8080"
+        "default": "8080",
+        "generate": false
       },
       {
         "name": "SECRET_KEY",
         "secret": true,
         "required": true,
-        "default": null
+        "default": null,
+        "generate": true
       }
     ],
     "migrate_command": "python -m app.migrate",

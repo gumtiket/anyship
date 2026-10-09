@@ -96,9 +96,9 @@ def test_hardlinked_output_and_repeat_run_preserve_original(tmp_path):
     original = repo / "main.py"
     original.write_text("dummy-original")
     os.link(original, output / "Dockerfile")
-    run_analysis(repo, out_dir=output, log=lambda *_: None)
     before = {p.name: p.read_bytes() for p in output.iterdir()}
-    run_analysis(repo, out_dir=output, log=lambda *_: None)
+    with pytest.raises(ValueError, match="output_not_empty"):
+        run_analysis(repo, out_dir=output, log=lambda *_: None)
     assert original.read_text() == "dummy-original"
     assert before == {p.name: p.read_bytes() for p in output.iterdir()}
 

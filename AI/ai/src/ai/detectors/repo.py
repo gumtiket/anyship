@@ -5,10 +5,14 @@ from pathlib import Path
 from pathspec import GitIgnoreSpec
 
 from ai.models import WarningItem
+from ai.source_names import aliases as aliases
+from ai.source_names import qualified as qualified
 
 EXCLUDED_DIRS = frozenset(
     {
         ".git",
+        ".aws",
+        ".ssh",
         ".venv",
         "venv",
         "__pycache__",
@@ -86,7 +90,7 @@ class RepoView:
                     )
                 ):
                     continue  # Runtime data is neither source input nor a proposed build input.
-                if path.is_symlink() or ignored(path) or name.startswith(".env"):
+                if path.is_symlink() or ignored(path) or name.lower().startswith(".env"):
                     continue
                 if name == "VIOLATIONS.json" or name.endswith(".expected.json"):
                     continue  # Ground truth is not an analysis input.
@@ -129,25 +133,3 @@ class RepoView:
 
     def modules(self) -> list[tuple[str, ast.Module]]:
         return sorted(self._trees.items())
-
-
-def aliases(tree: ast.Module) -> dict[str, str]:
-    result = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for item in node.names:
-                result[item.asname or item.name.split(".")[0]] = (
-                    item.name if item.asname else item.name.split(".")[0]
-                )
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            for item in node.names:
-                result[item.asname or item.name] = f"{node.module}.{item.name}"
-    return result
-
-
-def qualified(node: ast.AST, imports: dict[str, str]) -> str:
-    if isinstance(node, ast.Name):
-        return imports.get(node.id, node.id)
-    if isinstance(node, ast.Attribute):
-        return qualified(node.value, imports) + "." + node.attr
-    return ""

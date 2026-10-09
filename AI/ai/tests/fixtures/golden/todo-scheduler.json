@@ -109,12 +109,6 @@
         "value": "INFO"
       },
       {
-        "name": "PORT",
-        "secret": false,
-        "generate": false,
-        "value": "8080"
-      },
-      {
         "name": "SECRET_KEY",
         "secret": true,
         "generate": true
@@ -149,12 +143,15 @@
   },
   "needs_confirmation": [
     "tfvars_schema",
-    "cost_table"
+    "cost_table",
+    "env_policy",
+    "app_reserved_names"
   ],
   "needs_approval": true,
   "transformation": {
     "status": "partial",
     "changed_files": [
+      ".dockerignore",
       "app/db.py",
       "app/main.py",
       "app/migrate.py",
@@ -175,25 +172,29 @@
         "name": "DATABASE_URL",
         "secret": true,
         "required": true,
-        "default": null
+        "default": null,
+        "generate": false
       },
       {
         "name": "LOG_LEVEL",
         "secret": false,
         "required": false,
-        "default": "INFO"
+        "default": "INFO",
+        "generate": false
       },
       {
         "name": "PORT",
         "secret": false,
         "required": false,
-        "default": "8080"
+        "default": "8080",
+        "generate": false
       },
       {
         "name": "SECRET_KEY",
         "secret": true,
         "required": true,
-        "default": null
+        "default": null,
+        "generate": true
       }
     ],
     "migrate_command": "python -m app.migrate",
@@ -219,5 +220,5 @@
   },
   "dockerfile_sha256": "6e8eb3df1849e89b0490123dd3902f32461dbbfb250f688ff991242e776ad108",
   "dockerfile_lint": [],
-  "diff_sha256": "12bc7d6f1bfd1340440dc1156ebde26cccfcf041b86eed11d9c05dd1ecb2afc9"
+  "diff_sha256": "8409b0cbd5cddb8d366064eb1c2f22da28b6565b34f67485624b1b225032a1f4"
 }

@@ -96,7 +96,8 @@ def test_samples_match_hand_spec_core_and_do_not_modify_sources(tmp_path, name, 
     result = run_analysis(source, out_dir=tmp_path / "out", artifact_llm=fake, log=lambda *_: None)
     spec = result.deploy_spec
     assert spec and spec.workload.type == kind and spec.workload.scale_to_zero == scale
-    assert spec.workload.max_request_seconds == 25 and spec.ingress == "internal"
+    assert spec.workload.max_request_seconds == 10 and spec.ingress == "public"
+    assert "spec_llm_fallback" in {w.code for w in result.packaging_warnings}
     hand = yaml.safe_load(
         (ROOT / "ai" / "deliverables" / "hand-specs" / f"{name}.deploy-spec.yaml").read_text()
     )

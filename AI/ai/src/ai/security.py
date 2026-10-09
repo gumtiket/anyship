@@ -4,14 +4,17 @@ import ast
 import json
 import re
 
+from ai.credentials import (
+    DUMMY_SECRET as DUMMY_SECRET,
+)
+from ai.credentials import (
+    credential_name as credential_name,
+)
+from ai.credentials import (
+    credential_urls,
+    secret_literals,
+)
 from ai.detectors.repo import RepoView, aliases, qualified
-
-DUMMY_SECRET = "dummy-secret-do-not-use"
-SECRET_WORDS = {"secret", "password", "key", "token"}
-
-
-def credential_name(name: str) -> bool:
-    return bool(set(re.sub(r"([a-z])([A-Z])", r"\1_\2", name).lower().split("_")) & SECRET_WORDS)
 
 
 def node_span(source: str, node: ast.AST) -> tuple[int, int]:
@@ -43,7 +46,7 @@ class SourceMasker:
         self.blocked_files: set[str] = set()
         self._nodes: dict[str, list[ast.Constant]] = {}
         for file, tree in repo.modules():
-            secrets = []
+            secrets = secret_literals(tree)
             imports = aliases(tree)
             for node in ast.walk(tree):
                 if isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -108,13 +111,27 @@ class SourceMasker:
         # Config values are not sent to the LLM in P2, but avoid diffing credential-like configs.
         for file in repo.files():
             text = repo.read(file)
-            credential_urls = re.findall(
-                r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"'<>/@]+:[^\s\"'<>/@]+@[^\s\"'<>]+",
-                text,
-            )
-            if credential_urls:
+            urls = credential_urls(text)
+            if urls:
                 self.blocked_files.add(file)
-                self._values.update(credential_urls)
+                self._values.update(urls)
+            if file.endswith(".json"):
+                try:
+
+                    def collect(value, file=file):
+                        if isinstance(value, dict):
+                            for key, item in value.items():
+                                if credential_name(key) and isinstance(item, str) and item:
+                                    self._values.add(item)
+                                    self.blocked_files.add(file)
+                                collect(item)
+                        elif isinstance(value, list):
+                            for item in value:
+                                collect(item)
+
+                    collect(json.loads(text))
+                except (ValueError, RecursionError):
+                    pass
             if file.endswith((".yaml", ".yml", ".toml", ".ini", ".cfg")):
                 values = re.findall(
                     r"(?im)^\s*[\w.-]*(?:secret|password|token|key)[\w.-]*\s*[:=]\s*['\"]?([^\n]+)",
@@ -147,6 +164,8 @@ class SourceMasker:
                 }
                 for form in sorted(forms, key=len, reverse=True):
                     text = text.replace(form, "[REDACTED]")
+        for url in credential_urls(text):
+            text = text.replace(url, "[REDACTED]")
         return text
 
     def contains_sensitive(self, text: str) -> bool:

@@ -2,8 +2,9 @@ import ast
 
 from ai.detectors.repo import RepoView, aliases, qualified
 from ai.models import Signal
+from ai.spec.tfvars_schema import MVP_REQUEST_LIMIT_SECONDS
 
-LONG_REQUEST_THRESHOLD = 25
+LONG_REQUEST_THRESHOLD = MVP_REQUEST_LIMIT_SECONDS
 
 
 def detect_signals(repo: RepoView) -> list[Signal]:

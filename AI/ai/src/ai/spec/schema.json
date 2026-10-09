@@ -48,9 +48,112 @@
     },
     "Environment": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "value"
+            ]
+          },
+          "if": {
+            "properties": {
+              "secret": {
+                "const": true
+              }
+            },
+            "required": [
+              "secret"
+            ]
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "generate": {
+                "const": true
+              }
+            },
+            "required": [
+              "generate"
+            ]
+          },
+          "then": {
+            "properties": {
+              "secret": {
+                "const": true
+              }
+            },
+            "required": [
+              "secret"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "name": {
+                "pattern": "_URL$"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "then": {
+            "properties": {
+              "generate": {
+                "const": false
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "name": {
-          "pattern": "^[A-Z_][A-Z0-9_]*$",
+          "maxLength": 128,
+          "not": {
+            "anyOf": [
+              {
+                "enum": [
+                  "BASH_ENV",
+                  "CDPATH",
+                  "ENV",
+                  "HOME",
+                  "LAMBDA_RUNTIME_API",
+                  "LAMBDA_RUNTIME_DIR",
+                  "LAMBDA_TASK_ROOT",
+                  "LD_LIBRARY_PATH",
+                  "LD_PRELOAD",
+                  "NODE_OPTIONS",
+                  "PATH",
+                  "PORT",
+                  "PYTHONHOME",
+                  "PYTHONPATH",
+                  "PYTHONSTARTUP",
+                  "RUBYOPT",
+                  "SHELLOPTS",
+                  "_HANDLER",
+                  "_X_AMZN_TRACE_ID"
+                ]
+              },
+              {
+                "pattern": "^(AWS_|DOCKER_|LAMBDA_)"
+              }
+            ]
+          },
+          "pattern": "^[A-Z][A-Z0-9_]+$",
           "title": "Name",
           "type": "string"
         },
@@ -67,6 +170,7 @@
         "value": {
           "anyOf": [
             {
+              "maxLength": 4096,
               "type": "string"
             },
             {
@@ -74,6 +178,10 @@
             }
           ],
           "default": null,
+          "not": {
+            "pattern": "[\\r\\n\\x00]",
+            "type": "string"
+          },
           "title": "Value"
         }
       },
@@ -185,6 +293,7 @@
   "additionalProperties": false,
   "properties": {
     "app": {
+      "pattern": "^[a-z][a-z0-9-]{1,29}[a-z0-9]$",
       "title": "App",
       "type": "string"
     },
@@ -207,11 +316,8 @@
       "type": "string"
     },
     "ingress": {
+      "const": "public",
       "default": "public",
-      "enum": [
-        "public",
-        "internal"
-      ],
       "title": "Ingress",
       "type": "string"
     },
@@ -225,6 +331,18 @@
     "backing_services": {
       "items": {
         "$ref": "#/$defs/BackingService"
+      },
+      "not": {
+        "contains": {
+          "properties": {
+            "type": {
+              "const": "object_storage"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
       },
       "title": "Backing Services",
       "type": "array"
