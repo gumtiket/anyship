@@ -26,6 +26,7 @@ def main():
     with TemporaryDirectory(prefix="anyship-browser-test-") as directory:
         fixture = GitHubHTTP()
         onboarding = "--onboarding" in sys.argv
+        mock = "--mock" in sys.argv
         fixture.repo_selected = not onboarding
         with httpx.Client(transport=httpx.MockTransport(fixture)) as remote:
             # Every outgoing request is intercepted; unknown routes fail closed.
@@ -34,6 +35,7 @@ def main():
                 app_origin="http://127.0.0.1:8001", database_url=f"sqlite:///{Path(directory) / 'test.db'}",
                 token_key=Fernet.generate_key().decode(), github_client_id="fixture",
                 github_client_secret="fixture", github_app_slug="fixture", ai_mode="placeholder",
+                deployment_mode="mock" if mock else "unavailable", mock_step_delay=0.15,
             ))
             Base.metadata.create_all(app.state.engine)
             @app.get("/_test_only/login")
@@ -66,6 +68,10 @@ def main():
             with TestClient(app, base_url="http://127.0.0.1:8001") as client:
                 login(client)
                 cookie = client.cookies.get("app_session")
+                if mock:
+                    project = client.post("/api/projects", json={"repository_url": "https://github.com/owner/real-repo", "branch": "main"},
+                        headers={"Origin": "http://127.0.0.1:8001", "X-CSRF-Token": client.get("/api/me").json()["csrf_token"]})
+                    assert project.status_code == 201, project.text
             uvicorn.run(app, host="127.0.0.1", port=8001, access_log=False)
 
 

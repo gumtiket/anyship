@@ -2,6 +2,39 @@
 
 AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안내](../docs/LOCAL_DEVELOPMENT.md)를 참고하세요. 아래는 AWS 환경 등록 API와 독립적으로 사용할 수 있는 GitHub 모듈의 안내입니다.
 
+## Mock 어댑터로 배포 흐름 시험하기
+
+Infra의 `MockAdapter`를 사용하는 개발 전용 기능입니다. 실제 AWS·SSH·GitHub 배포 요청이나 이미지 빌드를 하지 않으며, 기존 AWS의 검증된 연결 상태도 바꾸지 않습니다.
+
+1. `service/`에서 `python -m pip install -r requirements-dev.txt`를 실행합니다. 같은 저장소의 `infra/adapters`를 설치하므로 두 폴더가 함께 있어야 합니다.
+2. `service/.env.github.local`에 `APP_DEPLOYMENT_MODE=mock`을 설정합니다. 기본값은 `unavailable`이며 운영 설정에서는 mock을 거부합니다. `APP_MOCK_STEP_DELAY=0.3`으로 단계별 지연을 조절할 수 있습니다(0~2초).
+3. `python -m alembic upgrade head`로 `0007` 마이그레이션을 적용하고 프론트엔드를 빌드한 뒤 서버를 재시작합니다. 새 테이블 `mock_deployments`, `mock_jobs`가 추가됩니다.
+4. 프로젝트 상세의 **모의 배포**에서 샘플 AWS 또는 샘플 온프레미스를 선택하고 환경을 저장합니다. ARN을 저장한 자신의 기존 AWS 등록도 모의 입력으로 사용할 수 있습니다. AWS 키와 실제 CloudFormation 생성은 필요하지 않습니다.
+5. **모의 연결 확인 → 모의 배포**를 실행합니다. 테스트 버전 `aaaaaaa`를 배포한 뒤 `bbbbbbb`를 배포하면 이전 버전 롤백도 시험할 수 있습니다. 성공·연결 실패·앱 시작 실패·헬스체크 실패를 화면에서 선택합니다.
+6. **상태 새로고침**, **모의 롤백**, **모의 배포 제거**로 나머지 흐름을 확인합니다. 반환 주소는 형식 예시이며 실제로 열 수 있는 주소가 아닙니다.
+
+모의 실행 상태는 메모리에만 있고 작업 기록은 DB에 저장됩니다. 재시작 후에는 연결 확인·현재 배포·롤백 가능한 버전이 초기화되며, 중단된 작업은 `interrupted`로 표시합니다. 과거 성공 기록을 현재 실행 상태로 취급하지 않습니다. 같은 DB를 사용하는 mock 서버는 로컬에서 한 프로세스만 실행할 수 있습니다. 여러 Uvicorn worker나 여러 호스트에 분산한 실행은 지원하지 않습니다.
+
+프로젝트와 환경은 소유자의 현재 워크스페이스에서만 사용할 수 있습니다. 모의 작업 중에는 프로젝트·환경 등록 삭제를 차단합니다. 작업 완료 후 환경 등록을 삭제하면 해당 모의 선택이 해제되고 작업 기록은 남습니다. 프로젝트 연결 삭제 시에는 모의 선택과 작업 기록도 함께 삭제됩니다.
+
+| API | 역할 |
+| --- | --- |
+| `GET /api/projects/{id}/mock-deployment` | 선택 가능한 환경, 저장된 선택, 현재 모의 상태·버전 |
+| `PUT /api/projects/{id}/mock-deployment` | `{source, set_name}` 저장. 배포 중인 환경 변경은 모의 배포 제거 후 가능 |
+| `POST /api/projects/{id}/mock-deployment/jobs` | `{request_id, action, scenario, image_tag}`로 작업 생성, `202`와 작업 ID 반환 |
+| `GET /api/projects/{id}/mock-deployment/jobs?limit=50&offset=0` | 작업 이력과 진행 로그 |
+| `GET /api/projects/{id}/mock-deployment/jobs/{job_id}` | 개별 작업 조회 |
+
+`source`는 `sample-aws`, `sample-onprem` 또는 자신이 등록한 AWS 환경 UUID입니다. `set_name`은 환경에 맞는 `aws-serverless`, `aws-always-on`, `onprem`입니다. Service UUID를 그대로 넘기지 않고 별도로 저장한 21자 식별자를 Infra에 전달합니다.
+
+`action`은 `check`, `deploy`, `rollback`, `destroy`, `scenario`는 `success`, `check_fails`, `deploy_fails`, `unhealthy`입니다. 배포·롤백에는 7~40자리 소문자 16진수 `image_tag`가 필요하고 나머지 작업에는 빈 문자열을 사용합니다. 테스트 명세는 서버의 고정 샘플이며 비밀 값이나 임의 명세 입력은 받지 않습니다. 변경 API에는 로그인 쿠키, `Origin`, `X-CSRF-Token`이 필요합니다.
+
+같은 작업의 응답이 유실되면 같은 UUID `request_id`와 본문으로 재시도합니다. 기존 작업은 `200`으로 반환하고 내용이 다르면 `409`입니다. 실패한 작업을 새로 실행하려면 새 UUID를 사용합니다. 상태는 `queued → running → succeeded/failed`이며 중단 시 `interrupted`입니다. `mock: true`와 결과의 `ok`, `error.message/hint/retryable`을 확인합니다. 실제 AWS 검증 API와 상태는 이 경로와 분리되어 있습니다.
+
+작업은 두 개의 백그라운드 스레드에서 처리하고 같은 프로젝트의 동시 작업을 막습니다. 작업 시각은 UTC Unix 밀리초입니다. 로그에서 임의 진단 데이터와 알려진 비밀 패턴을 걸러내며, 예상하지 못한 예외의 원문은 저장하지 않습니다. 실제 어댑터 연결은 `MockRunner`를 자동 대체하는 방식이 아닌 별도 후속 작업입니다.
+
+검증: `python -m pytest tests/test_mock_deployments.py -q`. PostgreSQL은 기존 `ANYSHIP_TEST_DATABASE_URL`의 독립 테스트 DB 규칙을 따릅니다. 브라우저 테스트는 `python -m tests.browser_fixture --mock` 후 `http://127.0.0.1:8001/_test_only/login`을 열어 진행합니다. 이 도우미는 별도 임시 DB와 가짜 GitHub만 사용하며 운영 앱에는 포함되지 않습니다.
+
 ## AWS 환경 등록 API
 
 Service가 CloudFormation 링크를 반환하면 프론트엔드는 `target="_blank"`, `rel="noopener noreferrer"`로 엽니다. 이용자는 AWS 콘솔에서 IAM 생성에 동의하고 스택의 `CREATE_COMPLETE`를 확인한 뒤 Outputs의 `RoleArn`을 서비스에 입력합니다. 입력한 ARN은 검증과 별도로 DB에 저장합니다. Service는 연결된 AWS 어댑터의 `check`에 저장한 External ID를 전달하고, 성공한 경우에만 연결 완료로 처리합니다. 기본 실행은 어댑터 연결 대기 상태이며 AWS를 호출하지 않습니다. 기존 프론트엔드의 **AWS 환경** 메뉴에서 이 흐름을 실행합니다. AWS 콘솔의 자동 콜백은 사용하지 않습니다.
@@ -20,7 +53,7 @@ Service가 CloudFormation 링크를 반환하면 프론트엔드는 `target="_bl
 
 ### 설정과 DB 준비
 
-Service 가상환경에 `python -m pip install -e ".[web,test]"`로 AWS SDK를 포함한 의존성을 설치합니다. 실제 서버에 적용할 때 기존 실행 설정 파일(`.env.github.local`) 또는 환경변수에 아래 값을 설정하고, 대상 DB를 확인한 후 Service 디렉터리에서 `python -m alembic upgrade head`를 실행합니다. 마이그레이션 `0005`는 `aws_environments` 테이블을 추가하고, `0006`은 검증 전 입력값을 위한 `submitted_role_arn`을 추가합니다. 기존 연결과 데이터를 보존하며, 이미 검증된 ARN은 입력값에도 복사합니다. 실행 중인 서비스의 DB에 자동 적용하지는 않습니다.
+Service 가상환경에 `python -m pip install -r requirements-dev.txt`로 AWS SDK를 포함한 의존성을 설치합니다. 실제 서버에 적용할 때 기존 실행 설정 파일(`.env.github.local`) 또는 환경변수에 아래 값을 설정하고, 대상 DB를 확인한 후 Service 디렉터리에서 `python -m alembic upgrade head`를 실행합니다. 마이그레이션 `0005`는 `aws_environments` 테이블을 추가하고, `0006`은 검증 전 입력값을 위한 `submitted_role_arn`을 추가합니다. 기존 연결과 데이터를 보존하며, 이미 검증된 ARN은 입력값에도 복사합니다. 실행 중인 서비스의 DB에 자동 적용하지는 않습니다.
 
 | 설정 | 내용 |
 | --- | --- |
@@ -135,7 +168,7 @@ python -m pip install "C:\path\to\project\service"
 모듈 개발 환경에서는 `service` 안에서 편집 가능 설치를 사용할 수 있습니다.
 
 ```powershell
-python -m pip install -e ".[web,test]"
+python -m pip install -r requirements-dev.txt
 ```
 
 설정과 코드 수정은 호출자가 담당합니다. 객체를 생성하는 것만으로 파일이나 네트워크 작업을 수행하지 않습니다. 다음 코드는 각 메서드를 호출할 때 실제 복제·커밋·푸시·PR 생성을 수행하는 예시입니다. `repo.clone()`에는 아직 존재하지 않는 대상 경로를 사용하세요.

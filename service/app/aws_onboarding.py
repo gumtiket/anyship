@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from .aws_adapter import AwsAdapter, AwsCheckError, ERRORS
 from .aws_validation import role_account_id
 from .db import AwsEnvironment
+from .mock_deployments import clear_targets
 
 REQUEST_TTL = 86400
 VERIFICATION_LEASE = 120
@@ -102,6 +103,8 @@ def router(settings, adapter: AwsAdapter | None, db, current, mutation):
     @routes.delete("/{environment_id}", status_code=204)
     def delete_environment(environment_id: uuid.UUID, login=Depends(mutation), session=Depends(db)):
         row = require(session, login, str(environment_id))
+        session.refresh(row, with_for_update=True)
+        clear_targets(session, environment_id=row.id)
         removed = session.execute(delete(AwsEnvironment).where(
             AwsEnvironment.id == row.id,
             or_(AwsEnvironment.status != "VERIFYING", AwsEnvironment.lease_until <= int(time.time())),

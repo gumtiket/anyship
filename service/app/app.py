@@ -9,6 +9,8 @@ from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -18,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from .config import Settings
 from .db import CodeChange, DemoChange, LoginSession, Membership, OAuthAttempt, Project, RepositoryConnection, User, Workspace, database
 from .github_api import DemoGitHub, GitHubAPI, GitHubFailure
-from . import aws_onboarding, code_changes, demo_changes, onboarding
+from . import aws_onboarding, code_changes, demo_changes, mock_deployments, onboarding
 from .aws_adapter import AwsAdapter
 
 auth_logger = logging.getLogger("anyship.auth")
@@ -51,15 +53,30 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
     engine, sessions = database(settings.database_url)
     cipher = Fernet(settings.token_key.encode() if settings.token_key else Fernet.generate_key())
     github = gateway or (DemoGitHub() if settings.demo else GitHubAPI())
+    mock_runner = mock_deployments.MockRunner(settings, sessions) if settings.deployment_mode == "mock" else None
 
     @asynccontextmanager
     async def lifespan(app):
-        yield
-        engine.dispose()
+        try:
+            if mock_runner:
+                mock_runner.start()
+            yield
+        finally:
+            if mock_runner:
+                mock_runner.close()
+            engine.dispose()
 
     app = FastAPI(title="AnyShip", lifespan=lifespan)
     app.state.engine = engine
     app.state.sessions = sessions
+    app.state.mock_runner = mock_runner
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_input(request, error):
+        if "/mock-deployment" in request.url.path:
+            # Reject unsupported secret inputs without echoing their values.
+            return JSONResponse({"detail": "모의 작업의 입력값을 확인해 주세요. 지원하는 환경·작업과 7~40자리 16진수 버전을 사용하세요."}, status_code=422)
+        return await request_validation_exception_handler(request, error)
 
     @app.middleware("http")
     async def headers(request, call_next):
@@ -110,6 +127,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
 
     app.include_router(onboarding.router(settings, github, db, current, mutation, access_token))
     app.include_router(aws_onboarding.router(settings, aws_adapter, db, current, mutation))
+    app.include_router(mock_deployments.router(settings, mock_runner, db, current, mutation))
 
     def installations(login):
         return github.installations(access_token(login))
@@ -159,6 +177,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
                 "aws_regions": list(settings.aws_regions),
                 "aws_setup_issues": settings.aws_setup_issues,
                 "ai_available": False, "ai_mode": settings.ai_mode, "demo_changes_available": settings.demo,
+                "deployment_mode": settings.deployment_mode,
                 "callback_url": settings.app_origin + "/api/auth/github/callback"}
 
     @app.post("/api/auth/demo")
@@ -290,6 +309,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
         ).with_for_update())
         if project is None:
             raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+        mock_deployments.clear_targets(session, project_id=project_id)
         # Conditional deletes compete with workflow claims on the same rows.
         # Keep all changes in one transaction so a busy child rolls back cleanup.
         session.execute(delete(CodeChange).where(

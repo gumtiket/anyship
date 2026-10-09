@@ -119,6 +119,39 @@ class CodeChange(Base):
     lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
+class MockDeployment(Base):
+    __tablename__ = "mock_deployments"
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)
+    source: Mapped[str] = mapped_column(String(36))
+    aws_environment_id: Mapped[str | None] = mapped_column(ForeignKey("aws_environments.id"), nullable=True, index=True)
+    label: Mapped[str] = mapped_column(String(100))
+    kind: Mapped[str] = mapped_column(String(12))
+    adapter_env_id: Mapped[str] = mapped_column(String(21), unique=True)
+    set_name: Mapped[str] = mapped_column(String(24))
+    checked_runtime_id: Mapped[str] = mapped_column(String(36), default="")
+    active_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class MockJob(Base):
+    __tablename__ = "mock_jobs"
+    __table_args__ = (UniqueConstraint("project_id", "request_id", name="uq_mock_job_request"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(36))
+    runtime_id: Mapped[str] = mapped_column(String(36))
+    adapter_env_id: Mapped[str] = mapped_column(String(21))
+    target_label: Mapped[str] = mapped_column(String(100))
+    set_name: Mapped[str] = mapped_column(String(24))
+    action: Mapped[str] = mapped_column(String(16))
+    scenario: Mapped[str] = mapped_column(String(24))
+    image_tag: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    logs_json: Mapped[str] = mapped_column(Text, default="[]")
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class DemoChange(Base):
     __tablename__ = "demo_changes"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
