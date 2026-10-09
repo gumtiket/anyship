@@ -1,5 +1,3 @@
-import io
-import shlex
 import subprocess
 import urllib.error
 from pathlib import Path
@@ -11,54 +9,10 @@ from anyship_adapters import compose_host
 from anyship_adapters.compose_host import ComposeHost, wait_healthy
 from anyship_adapters.ssh import SshConnection, SshRunner
 
+from fakes import FakePopen, FakeServer
 from specs import GENERATED
 
 HOST = "todo.demo.onprem.anyship.cloud"
-
-
-class FakeServer:
-    """가짜 SSH 실행기: 서버의 파일을 딕셔너리로 흉내 내고, 받은 명령을 기록한다."""
-
-    def __init__(self, fail_path_suffix=None):
-        self.files: dict[str, bytes] = {}
-        self.commands: list[list[str]] = []
-        self.kwargs: list[dict] = []
-        self._fail_suffix = fail_path_suffix
-
-    def __call__(self, cmd, **kwargs):
-        remote = shlex.split(cmd[-1])
-        self.commands.append(remote)
-        self.kwargs.append(kwargs)
-        if remote[0] == "cat":
-            found = remote[1] in self.files
-            return subprocess.CompletedProcess(cmd, 0 if found else 1,
-                                               stdout=self.files.get(remote[1], b""), stderr=b"")
-        if remote[:2] == ["sh", "-c"]:  # SshRunner.put이 만든 파일 쓰기 명령
-            path = remote[4]
-            if self._fail_suffix and path.endswith(self._fail_suffix):
-                return subprocess.CompletedProcess(cmd, 1, stdout=b"", stderr=b"disk full")
-            self.files[path] = kwargs["input"]
-        return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
-
-    def written(self):
-        return [Path(p).name for p in self.files]
-
-    def last(self):
-        return self.commands[-1]
-
-
-class FakePopen:
-    """로컬 `docker save`를 흉내 낸다."""
-
-    def __init__(self, cmd, *, code=0, image=b"IMAGE-BYTES", errors=b"", **kwargs):
-        self.cmd, self.kwargs, self.code, self.killed = cmd, kwargs, code, False
-        self.stdout, self.stderr = io.BytesIO(image), io.BytesIO(errors)
-
-    def kill(self):
-        self.killed = True
-
-    def wait(self):
-        return self.code
 
 
 def make(fail_path_suffix=None, popen=None):
