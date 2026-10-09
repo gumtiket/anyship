@@ -9,10 +9,22 @@ data "aws_route53_zone" "main" {
 # (*.<env-id>.onprem.anyship.cloud -> that server's public IP) and removes it
 # when the environment is deleted. No human adds records per server.
 #
-# Scope: this one zone, A records, UPSERT/DELETE only.
-# TODO: also restrict record names with the condition key
-# route53:ChangeResourceRecordSetsNormalizedRecordNames so the service server
-# cannot touch records like app.anyship.cloud.
+# Scope: this one zone, A records, UPSERT/DELETE only, and only record names of
+# the form *.<env-id>.onprem.anyship.cloud, so the service server cannot touch
+# records like www.anyship.cloud.
+#
+# Route 53 normalizes names before checking this condition: lowercase, and the
+# wildcard "*" becomes "\052" (the same form the API returns). Whether the
+# normalized name ends with a dot is not certain from the docs, so both forms
+# are allowed; both stay under onprem.anyship.cloud. Verify with
+# infra/adapters/scripts/check_dns_policy.py after every apply.
+locals {
+  env_record_name_patterns = [
+    "\\052.*.onprem.anyship.cloud",
+    "\\052.*.onprem.anyship.cloud.",
+  ]
+}
+
 resource "aws_iam_role_policy" "route53_env_records" {
   name = "route53-env-records"
   role = aws_iam_role.service_server.id
@@ -29,6 +41,9 @@ resource "aws_iam_role_policy" "route53_env_records" {
           "ForAllValues:StringEquals" = {
             "route53:ChangeResourceRecordSetsRecordTypes" = ["A"]
             "route53:ChangeResourceRecordSetsActions"     = ["UPSERT", "DELETE"]
+          }
+          "ForAllValues:StringLike" = {
+            "route53:ChangeResourceRecordSetsNormalizedRecordNames" = local.env_record_name_patterns
           }
         }
       },
