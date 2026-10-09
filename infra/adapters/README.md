@@ -98,7 +98,8 @@ else:
 | | `ssh_user`, `ssh_port` | 기본 `deploy`, 22 |
 | | `db_address` | (`aws-always-on`) 공용 RDS 주소. `*.rds.amazonaws.com`만 허용. 출력 `db_address` |
 | | `db_port` | 기본 5432 |
-| | `db_secret_arn` | (`aws-always-on`) RDS 마스터 비밀의 ARN. 출력 `db_master_secret_arn`. 비밀번호 자체가 아니다 |
+| | `db_secret_arn` | (`aws-always-on`) RDS 마스터 비밀의 ARN. 출력 `db_master_secret_arn`. 비밀번호 자체가 아니다. 계정이 `role_arn`의 계정과 같아야 한다 |
+| | `state_bucket` | Terraform state 버킷. 온보딩 스택 출력 `StateBucketName`(이름은 계산할 수 없어 서비스가 저장해 둔다). `anyship-tfstate-<계정>-<리전>-<8자>` 형식만 허용하고 계정이 `role_arn`의 계정과 같아야 한다. `terraform_runner`가 쓴다 |
 | `OnpremEnvironment` | `env_id` | 위와 같음 |
 | | `host` | IP 또는 호스트 이름(SSH 옵션을 끼워 넣을 수 있는 값은 거부) |
 | | `ssh_user` | 기본 `deploy` |
@@ -158,7 +159,7 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
 
 환경과 맞지 않는 세트를 넘기면 `set_not_supported`로 거부합니다.
 
-### `aws-always-on`의 특징 (구현 중)
+### `aws-always-on`의 특징
 
 온프레미스와 같은 부품(`ComposeHost`, `render_stack`, `SshRunner`, `redact`)을 쓰고, 다음이 다릅니다.
 
@@ -182,7 +183,206 @@ env = TypeAdapter(Environment).validate_python(row_from_db)
 - **`check`가 서비스의 `STSAdapter.check`와 다른 이유**: 서비스의 것은 환경 등록 때 한 번 하는 신뢰 정책 검증
   (External ID 필수 여부, 계정 일치)이고, 이쪽은 배포 직전 점검(역할, 호스트, Docker, Traefik)입니다.
   오류 코드 이름(`access_denied`, `account_mismatch`, `service_credentials_unavailable`, `aws_unavailable`)은 서로 맞췄습니다.
-- 이미지는 온프레미스와 같이 서비스 서버의 로컬 이미지를 SSH로 보냅니다(레지스트리 없음).
+- 이미지는 온프레미스와 같이 서비스 서버의 로컬 이미지를 SSH로 보냅니다(레지스트리 없음). 이미지는 아래 `이미지 빌더`가 만듭니다.
+- **마이그레이션용 임시 컨테이너는 Traefik에서 숨깁니다**(`docker compose run --rm --label traefik.enable=false`, 온프레미스도 같음).
+  숨기지 않으면 임시 컨테이너가 앱의 Traefik 라벨을 물려받아 같은 서비스의 두 번째 서버로 등록되고, 사라진 뒤 설정이 갱신되기 전까지
+  배포 직후 첫 요청에 502가 한 번 납니다(실제 호스트에서 재현했고 고친 뒤 3번 연속 0회).
+
+## Terraform 실행기 (`terraform_runner`)
+
+서비스가 사용자 계정에서 Terraform을 실행할 때 쓰는 모듈입니다(첫 대상은 공용 기반 `infra/user-account`).
+`infra/user-account/tf.sh`(사람이 서비스 서버에서 하던 일)를 코드로 옮긴 것입니다.
+
+```python
+from pathlib import Path
+from anyship_adapters import AwsEnvironment
+from anyship_adapters.terraform_runner import TerraformError, TerraformRunner
+
+runner = TerraformRunner(Path("infra/user-account"), plugin_cache_dir=Path("~/.terraform.d/plugin-cache").expanduser())
+env = AwsEnvironment(..., state_bucket="anyship-tfstate-<계정>-<리전>-<8자>")  # 온보딩 스택 출력 StateBucketName
+try:
+    changed = runner.plan(env, variables, log)   # 변경이 있으면 True. 아무것도 바꾸지 않는다
+    runner.apply(env, variables, log)            # terraform apply -auto-approve
+    env = runner.read_foundation(env, log)       # state의 출력으로 host, db_address, db_port, db_secret_arn을 채운 새 환경
+except TerraformError as exc:
+    exc.error  # AdapterError(code, message, hint, retryable)
+    exc.tail   # 비밀을 가린 마지막 출력 15줄. 결과의 details에 넣는 용도
+```
+
+`variables`는 Terraform 변수 이름에서 값으로의 딕셔너리이고, **비밀이 아닌 값만** 넣습니다(임시 JSON 파일로 전달).
+`log`는 어댑터와 같은 `LogEvent` 콜백으로, Terraform 출력 줄이 실시간으로 `step 1/2`(init), `2/2`(명령)로 들어옵니다.
+
+**지키는 것**
+
+- 자격 증명은 AssumeRole한 임시 자격 증명을 **하위 프로세스의 환경변수로만** 줍니다(`AwsAccess.temporary_credentials`). 파일, 명령줄,
+  로그에 남지 않고, 서비스 서버의 `AWS_*` 환경과 인스턴스 메타데이터(`AWS_EC2_METADATA_DISABLED`)는 막습니다.
+- state는 사용자 계정의 버킷에 `<환경ID>/foundation.tfstate`로 둡니다. 백엔드 리전은 버킷 이름에서 꺼냅니다.
+- 실행마다 임시 `TF_DATA_DIR`을 쓰고 끝나면 지웁니다. 모듈 폴더는 `-chdir`로 제자리에서 읽으므로 동시 실행이 섞이지 않고,
+  모듈이 읽는 형제 폴더(`../onprem-vm/scripts` 등)는 그대로 동작합니다(그래서 모듈은 저장소의 `infra/` 트리 안에 있어야 합니다).
+- 같은 state(버킷, 환경 ID, state 이름)에는 한 번에 하나만 실행합니다. 한 프로세스 안에서는 먼저 막고, 여러 프로세스는 S3 잠금이 막습니다.
+- 출력 줄은 비밀을 가려서 전달하고, 중단하거나 제한 시간(기본 45분)이 지나면 `terraform` 프로세스를 종료합니다.
+
+**오류 코드** (`exc.error.code`)
+
+| 코드 | 언제 | 재시도 |
+|---|---|---|
+| `foundation_missing` | `state_bucket`이 없거나, state가 비어 있음(기반이 아직 없음) | 아니요 |
+| `terraform_module_missing` | 모듈 폴더에 `.tf` 파일이 없음 | 아니요 |
+| `invalid_terraform_input` | 변수 이름이나 값 형식이 올바르지 않음 | 아니요 |
+| `terraform_not_found` | 서비스 서버에 `terraform` 실행 파일이 없음 | 아니요 |
+| `access_denied`, `service_credentials_unavailable`, `aws_unavailable` | 역할을 맡지 못함(`AwsAccess`와 같은 코드) | 코드에 따라 |
+| `terraform_init_failed` | `init` 실패 | 아니요 |
+| `terraform_plan_failed`, `terraform_apply_failed`, `terraform_output_failed` | 각 명령 실패 | 예 |
+| `terraform_locked` | 같은 state에 다른 작업이 실행 중 | 예 |
+| `terraform_timeout` | 제한 시간 초과로 종료. 만들어진 것은 다시 실행하면 이어서 진행 | 예 |
+| `terraform_output_invalid` | 출력 JSON을 읽을 수 없음, 항목 누락, 값 검증 실패(틀린 필드 이름만 알리고 값은 싣지 않음) | 아니요 |
+
+**시간** (서비스 서버 실측, 변경 없는 기반, provider 캐시가 데워진 상태)
+
+| 호출 | 시간 |
+|---|---|
+| `plan` | 약 16초 |
+| `read_foundation` | 약 10.5초 |
+
+매 호출마다 AssumeRole과 `init`(백엔드 연결, provider 로드)을 하므로 변경이 없어도 약 10초가 듭니다. provider 캐시가 빈 첫 실행의 시간과
+기반을 처음 만드는 `apply`(RDS 때문에 약 20분)의 시간은 이 실행기로 측정하지 않았습니다.
+
+**시험**
+
+```bash
+python -m pytest infra/adapters    # 가짜 프로세스 기반 단위 테스트 + 진짜 하위 프로세스 1건
+
+# 서비스 서버에서, 이미 만든 기반에 대해(읽기 전용: plan만 실행)
+EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_terraform_runner.py   --role-arn <역할 ARN> --state-bucket <StateBucketName> --var-file <test.tfvars>
+```
+
+`smoke_terraform_runner.py`는 변경 없음, 출력 변환, 중복 실행 거부, 틀린 계정 ID 거부, 비밀과 임시 파일 정리를 확인합니다.
+`apply`는 실제 계정에서 이 실행기로 해 본 적이 없습니다(`plan`과 `output`만).
+
+## 이미지 빌더 (`image_builder`)
+
+서비스 서버의 로컬 도커에서 `<앱 이름>:<커밋 SHA>` 이미지를 빌드합니다. 서비스(A)가 PR이 머지된 커밋의 소스를 서비스 서버의
+로컬 폴더로 준비해서 부르고, 어댑터의 `deploy`가 이 이미지를 `docker save | ssh docker load`로 호스트에 보냅니다(레지스트리 없음).
+`Dockerfile`은 B가 만들어 레포에 넣어 둔 것을 씁니다.
+
+```python
+from pathlib import Path
+from anyship_adapters.image_builder import BuildError, ImageBuilder
+
+builder = ImageBuilder()
+try:
+    built = builder.build(Path("/path/to/merged/source"), "todo", "a1a1a1a", log)  # BuiltImage(image="todo:a1a1a1a", image_id="sha256:...")
+    builder.prune("todo", keep=5)  # 앱마다 최근 5개만 남기고 오래된 이미지를 지운다(서비스 서버 디스크 보호)
+except BuildError as exc:
+    exc.error  # AdapterError(code, message, hint, retryable)
+    exc.tail   # 비밀을 가린 마지막 출력 15줄
+```
+
+**지키는 것**
+
+- 원본 폴더를 건드리지 않고 **임시 복사본에서 빌드**합니다. `.git`과 `.env*`는 어느 깊이에서도 복사하지 않고(레포의 `.dockerignore`에 기대지 않음),
+  심볼릭 링크는 따라가지 않고 링크 그대로 둡니다. 복사본이 200MB를 넘으면 거부합니다(제외된 파일은 크기에 세지 않음).
+- 도커 프로세스에는 서비스 서버의 AWS 환경과 토큰을 넘기지 않고 입력을 기다리지 못하게 합니다.
+- 이미지는 `linux/amd64`로 고정하고 빌드 뒤에 아키텍처를 확인합니다.
+- 같은 (앱, SHA)는 동시에 빌드하지 않고, 제한 시간(기본 10분)이 지나거나 취소되면 도커 클라이언트를 종료합니다.
+- `Dockerfile` 경로에 `..`나 절대 경로를 허용하지 않고, `Dockerfile`이 링크이거나 소스 밖을 가리키면 거부합니다.
+
+**오류 코드** (`exc.error.code`)
+
+| 코드 | 언제 | 재시도 |
+|---|---|---|
+| `invalid_build_input` | 앱 이름, SHA, 소스 폴더, `Dockerfile` 경로가 올바르지 않음 | 아니요 |
+| `build_context_too_large` | 소스가 200MB를 넘음 | 아니요 |
+| `docker_not_found` | 서비스 서버에 `docker`가 없음 | 아니요 |
+| `docker_unavailable` | 도커 데몬에 연결할 수 없음(실행 중인지, 사용자가 `docker` 그룹인지) | 예 |
+| `docker_build_failed` | 빌드가 실패했거나 빌드한 이미지를 확인할 수 없음. `exc.tail`에 마지막 출력 | 아니요 |
+| `wrong_architecture` | 이미지가 `amd64`가 아님 | 아니요 |
+| `build_in_progress` | 같은 (앱, SHA)를 이미 빌드 중 | 예 |
+| `build_timeout` | 제한 시간 초과로 종료 | 예 |
+
+**알려진 위험(수용한 것)**
+
+- 이 빌드는 사용자 레포의 `Dockerfile`(임의의 `RUN` 명령)을 **서비스 서버에서** 실행합니다. 서비스 서버의 IAM 역할은 사용자 계정 AssumeRole 권한을 가집니다.
+  **샘플 레포에만 쓰는 전제**이고, 격리된 빌드 환경은 확장 항목입니다.
+- 서버에서 확인한 것: 빌드 중 `RUN` 단계는 **인스턴스 메타데이터(IAM 자격 증명)에 닿지 못합니다**(IMDSv2 필수, 홉 제한 1).
+- 서버에서 확인한 것: 빌드 컨테이너는 서비스 포트(HTTPS 프록시용으로 `docker0` 주소에 바인딩한 `172.17.0.1:8000`)에 **닿습니다**.
+  서비스 API는 로그인이 필요해서 당장 영향은 작지만, 인증이 필요 없는 엔드포인트(`/api/health`, `/api/config`, `/api/auth/github/start`)는 도달할 수 있습니다.
+  빌드 전용 네트워크나 방화벽 규칙은 후속 과제입니다.
+
+**시간** (서비스 서버 `t3.medium` 실측, 베이스 이미지를 미리 받아 둔 상태)
+
+| 작업 | 시간 |
+|---|---|
+| B의 변환본(todo) 빌드, 콜드 | 약 8.4초 |
+| 같은 소스를 다시 빌드(레이어 캐시) | 약 0.3초(같은 이미지 ID) |
+| 베이스 이미지를 처음 받는 빌드 | 측정하지 않음 |
+| 변환본을 `AwsAlwaysOnAdapter.deploy`로 AWS 호스트에 배포(이미지 전송, 앱 DB 준비, 기동, 마이그레이션, 헬스체크) | 약 9~10초 |
+
+**시험**
+
+```bash
+python -m pytest infra/adapters        # 가짜 도커 기반 단위 테스트 + 진짜 하위 프로세스 1건
+
+# 서비스 서버에서(진짜 도커). AWS에는 아무것도 하지 않는다
+python -u infra/adapters/scripts/smoke_image_builder.py
+
+# 서비스 서버에서. B의 변환본을 빌드하고 AWS 호스트에 배포했다가 destroy한다
+EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_sample_deploy.py   --role-arn <역할 ARN> --state-bucket <StateBucketName> --staging
+```
+
+`smoke_image_builder.py`는 `.git`·`.env*`가 이미지에 없음(B의 `.dockerignore`를 지우고도), `amd64`, 빌드 중 메타데이터 차단, `prune`을 확인합니다.
+`smoke_sample_deploy.py`는 변환본이 `/healthz` 200, DB 읽기와 쓰기까지 동작하는지, `destroy` 뒤 앱 DB가 남아 이어지는지를 확인합니다.
+
+**B의 변환본에 대해 알아 둘 점**: 변환본은 서버 시작 때 DB를 초기화하지 않고 `python -m app.migrate`로 분리했으며, 이 마이그레이션은 시드 데이터를 넣지 않습니다.
+그래서 배포된 샘플은 빈 목록으로 시작합니다.
+
+## 배포 파이프라인 (`deployer`, `foundation`)
+
+서비스(A)가 부를 입구입니다. 소스 폴더와 커밋 SHA를 주면 이미지 빌드부터 공개 URL까지 한 번의 호출로 잇습니다.
+
+```python
+from anyship_adapters.deployer import Deployer
+from anyship_adapters.foundation import FoundationSettings
+from anyship_adapters.image_builder import ImageBuilder
+from anyship_adapters.terraform_runner import TerraformRunner
+
+deployer = Deployer(
+    {"aws-always-on": aws_adapter, "onprem": onprem_adapter},
+    ImageBuilder(),
+    runner=TerraformRunner(Path("infra/user-account")),   # runner와 foundation은 함께 줘야 한다(없으면 기반 단계를 건너뜀)
+    foundation=FoundationSettings(service_server_ip="...", ssh_public_key="ssh-ed25519 ...", acme_email="..."),
+)
+result = deployer.deploy(env, spec, Path("/path/to/merged/source"), commit_sha, secrets, log, set_name="aws-always-on")
+result.ok, result.url, result.image_tag
+result.details["stage"]             # 실패했을 때: spec / build / foundation / check / deploy
+result.details["foundation"]        # 성공했을 때(aws): host, db_address, db_port, db_secret_arn. 서비스가 환경 레코드에 저장할 값
+result.details["foundation_created"]  # 이번 호출이 기반을 새로 만들었으면 True
+```
+
+**순서**: 입력 검사 → 이미지 빌드 → (aws) 공용 기반 확인 → 연결 확인(`check`) → 배포 → 오래된 이미지 정리. 로그는 큰 단계(aws 1/5~5/5, 온프레미스 1/4~4/4)로
+다시 번호를 붙여 흘려 보내고, 부품 안쪽 번호는 메시지 앞에 `[3/8]`로 남습니다.
+
+- **입력 검사를 먼저 합니다.** 명세, 사용자 비밀 누락, SHA 형식, 앱 이름 길이(DB 이름 한도), 세트와 환경 종류 불일치는 빌드나 20분짜리 기반 생성을 시작하기 전에 `stage="spec"`으로 거절합니다.
+- **공용 기반(`ensure_foundation`)**: state에 출력이 있으면 읽기만 하고(약 10초), **state가 비어 있을 때만** `apply`로 만듭니다(첫 배포만, 약 20분).
+  `state_bucket`이 없거나 역할을 맡지 못했거나 잠금이 잡혀 있거나 출력이 이상하면 apply를 시작하지 않고 오류를 그대로 올립니다.
+  서비스가 저장해 둔 기반 값이 있어도 매번 읽어서 최신 값을 씁니다(호스트가 바뀌었을 때 낡은 값을 쓰지 않으려는 것).
+- **실패는 예외가 아니라 `ok=False` 결과**입니다. 실패한 단계 뒤는 실행하지 않고 정리도 하지 않습니다. 정리 실패는 경고만 남기고 배포 결과를 바꾸지 않습니다.
+  예기치 않은 예외는 `deploy_pipeline_error`(재시도 가능)로 돌려주며 `details["exception"]`에는 예외 종류만 싣습니다(원문에 비밀이 섞일 수 있어서).
+- 결과와 로그, 실패 상세에서 이번 배포의 비밀은 `***`로 가려집니다.
+- 기반을 만들 때 쓰는 값(`FoundationSettings`)은 환경이 아니라 서비스가 아는 값입니다. 선택 변수(`vpc_cidr`, `host_instance_type`, `host_volume_size`,
+  `db_instance_class`, `db_allocated_storage`)만 `overrides`로 바꿀 수 있습니다.
+
+**시험**
+
+```bash
+python -m pytest infra/adapters        # test_foundation.py, test_deployer.py 포함
+
+# 서비스 서버에서. 기반이 이미 있어야 한다(기반을 만들지 않고, apply는 막아 둔다)
+EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_deployer.py --role-arn <역할 ARN> --state-bucket <StateBucketName> --staging
+```
+
+`smoke_deployer.py`는 잘못된 입력의 조기 거절, 한 번의 호출로 5단계 로그와 기반 값이 결과에 실리는지, 공개 주소에서 읽기와 쓰기, `destroy`를 확인합니다(서버에서 13/13).
+**아직 서버에서 확인하지 않은 것**: 기반이 없을 때 처음부터 만드는 경로(실제 `apply` 약 20분과 실시간 로그, `created=True`).
 
 ## 오류 코드 (현재)
 
@@ -243,9 +443,11 @@ python -m pytest infra/adapters
 
 ## 남은 것
 
-- `aws-always-on` 어댑터 본체: `aws_access.py`(AssumeRole, 마스터 비밀번호 읽기)와 `compose.py`의 외부 DB 모드는 있고,
-  앱 DB 생성(`rds_admin.py`)과 어댑터 본체는 구현 중(이슈 #36)
-- 공용 기반을 첫 배포 때 만드는 `ensure_foundation`(Terraform 실행기와 함께), `*.aws` DNS 자동화
+- `*.aws` DNS 자동화
+- 기반을 처음부터 만드는 경로(`ensure_foundation`의 `apply`, 약 20분과 실시간 진행 로그)를 실제 계정에서 시험(지금은 가짜 실행기 시험과 `plan`, `output`만 확인)
+- 서비스 연동: 소스 가져오기, 환경 레코드에 기반 값과 `state_bucket` 저장, 배포 실행기와 잠금, 화면
+- Lambda 세트(`aws-serverless`)
+- 격리된 빌드 환경(지금은 서비스 서버에서 사용자 `Dockerfile`을 실행하므로 샘플 레포에만 쓸 것), 빌드 컨테이너가 서비스 포트에 닿는 것 막기
 - 앱의 비밀을 Secrets Manager에 보관(현재는 호스트의 `app.env`). 호스트 교체에도 비밀을 유지하고, 사용자 입력 비밀을
   재배포마다 다시 넘기지 않아도 되게 하려면 필요
 - 환경별 SSH 키, 앱 삭제 때 앱 DB 삭제 같은 확장 항목

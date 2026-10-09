@@ -43,6 +43,20 @@ class AwsEnvironment(AdapterModel):
     # RDS가 관리하는 비밀의 이름은 `rds!db-<UUID>`라서 `!`를 허용해야 한다.
     db_secret_arn: str | None = Field(
         default=None, pattern=r"^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[\w+=,.@!/-]+$")
+    # Terraform state 버킷(온보딩 스택 출력 StateBucketName). 이름은 계산할 수 없어서 서비스가 스택 출력에서 읽어 저장한다.
+    # 템플릿이 짓는 모양(anyship-tfstate-<계정ID>-<리전>-<스택ID 앞 8자>)만 받는다. terraform init의 인자로 들어가는 값이다.
+    state_bucket: str | None = Field(
+        default=None, pattern=r"^anyship-tfstate-[0-9]{12}-[a-z]{2}(-[a-z]+)+-[0-9]-[0-9a-f]{8}$")
+
+    @model_validator(mode="after")
+    def foundation_belongs_to_the_role_account(self):
+        # 다른 계정의 버킷에 state를 쓰거나 다른 계정의 비밀을 읽게 되는 실수(또는 조작)를 입구에서 막는다.
+        account = self.role_arn.split(":")[4]
+        if self.state_bucket and self.state_bucket.split("-")[2] != account:
+            raise ValueError("state_bucket must belong to the same account as role_arn")
+        if self.db_secret_arn and self.db_secret_arn.split(":")[4] != account:
+            raise ValueError("db_secret_arn must belong to the same account as role_arn")
+        return self
 
 
 class OnpremEnvironment(AdapterModel):

@@ -7,8 +7,9 @@ boto3 = pytest.importorskip("boto3")  # AWS 기능은 선택 의존성이라, �
 from botocore.exceptions import NoCredentialsError  # noqa: E402
 from botocore.stub import ANY, Stubber  # noqa: E402
 
-from anyship_adapters.aws_access import AwsAccess, AwsAccessError  # noqa: E402
+from anyship_adapters.aws_access import AwsAccess, AwsAccessError, TemporaryCredentials  # noqa: E402
 from anyship_adapters.models import AwsEnvironment  # noqa: E402
+from anyship_adapters.redact import redact_text  # noqa: E402
 
 ACCOUNT = "223455088214"
 EXTERNAL_ID = "ext-id-0123456789abcdef"
@@ -147,7 +148,7 @@ def test_a_missing_or_foreign_secret_arn_is_rejected_before_any_aws_call(arn):
     calls = []
     access = AwsAccess(lambda **kwargs: calls.append(kwargs))
     with pytest.raises(AwsAccessError) as caught:
-        access.read_master_password(env(db_secret_arn=arn))
+        access.read_master_password(env().model_copy(update={"db_secret_arn": arn}))  # 모델 검증을 건너뛴 객체
     assert caught.value.error.code == "invalid_secret_arn" and calls == []
 
 
@@ -159,3 +160,91 @@ def test_an_unusable_secret_is_rejected_without_leaking_its_content(secret):
         access.read_master_password(env())
     assert caught.value.error.code == "secret_unreadable"
     assert secret not in caught.value.error.model_dump_json()
+
+
+# --- temporary_credentials (Terraform 하위 프로세스용) -----------------------------------------------
+def assume_for(stub, seconds):
+    stub.add_response("assume_role", {"Credentials": CREDS},
+                      {"RoleArn": env().role_arn, "ExternalId": EXTERNAL_ID, "DurationSeconds": seconds,
+                       "RoleSessionName": ANY})
+
+
+def test_temporary_credentials_default_to_an_hour_and_become_three_environment_variables():
+    sts, stub = stubbed("sts")
+    assume_for(stub, 3600)
+    access, created = make({"sts": sts})
+    with stub:
+        credentials = access.temporary_credentials(env())
+    assert isinstance(credentials, TemporaryCredentials)
+    assert credentials.environ() == {"AWS_ACCESS_KEY_ID": CREDS["AccessKeyId"],
+                                     "AWS_SECRET_ACCESS_KEY": CREDS["SecretAccessKey"],
+                                     "AWS_SESSION_TOKEN": CREDS["SessionToken"]}
+    assert created == [{}]  # 세션을 따로 만들지 않고 STS 호출만 한다
+
+
+def test_a_shorter_duration_is_passed_to_aws():
+    sts, stub = stubbed("sts")
+    assume_for(stub, 1800)
+    access, _ = make({"sts": sts})
+    with stub:
+        access.temporary_credentials(env(), 1800)
+
+
+@pytest.mark.parametrize("seconds", [0, 899, 3601, 43200])
+def test_a_duration_outside_fifteen_minutes_to_an_hour_is_refused_before_calling_aws(seconds):
+    calls = []
+    access = AwsAccess(lambda **kwargs: calls.append(kwargs))
+    with pytest.raises(ValueError):
+        access.temporary_credentials(env(), seconds)
+    assert calls == []
+
+
+def test_the_credentials_never_show_up_in_repr_or_str():
+    sts, stub = stubbed("sts")
+    assume_for(stub, 3600)
+    access, _ = make({"sts": sts})
+    with stub:
+        credentials = access.temporary_credentials(env())
+    for text in (repr(credentials), str(credentials), f"{credentials}", f"{credentials!r}"):
+        assert all(value not in text for value in CREDS.values() if isinstance(value, str))
+
+
+def test_every_secret_value_can_be_registered_for_masking():
+    sts, stub = stubbed("sts")
+    assume_for(stub, 3600)
+    access, _ = make({"sts": sts})
+    with stub:
+        credentials = access.temporary_credentials(env())
+    leaked = f"ERROR key={CREDS['AccessKeyId']} secret={CREDS['SecretAccessKey']} token={CREDS['SessionToken']}"
+    masked = redact_text(leaked, credentials.secret_values())
+    assert all(value not in masked for value in (CREDS["AccessKeyId"], CREDS["SecretAccessKey"], CREDS["SessionToken"]))
+
+
+@pytest.mark.parametrize("aws_code, status, code, retryable", [
+    ("AccessDenied", 403, "access_denied", False),
+    ("ExpiredToken", 400, "service_credentials_unavailable", False),
+    ("Throttling", 400, "aws_unavailable", True),
+])
+def test_aws_errors_for_the_terraform_path_use_the_same_codes_and_never_echo_the_arn_or_external_id(
+        aws_code, status, code, retryable):
+    sts, stub = stubbed("sts")
+    stub.add_client_error("assume_role", service_error_code=aws_code, http_status_code=status,
+                          service_message=f"role {env().role_arn} external {EXTERNAL_ID}")
+    access, _ = make({"sts": sts})
+    with stub, pytest.raises(AwsAccessError) as caught:
+        access.temporary_credentials(env())
+    error = caught.value.error
+    assert (error.code, error.retryable) == (code, retryable)
+    assert EXTERNAL_ID not in error.model_dump_json() and env().role_arn not in error.model_dump_json()
+
+
+def test_a_response_without_the_expected_fields_is_reported_without_echoing_it():
+    class Incomplete:
+        def assume_role(self, **kwargs):
+            return {"Credentials": {"AccessKeyId": CREDS["AccessKeyId"]}}  # 비밀 키와 토큰이 없다
+
+    access, _ = make({"sts": Incomplete()})
+    with pytest.raises(AwsAccessError) as caught:
+        access.temporary_credentials(env())
+    assert caught.value.error.code == "aws_unavailable" and caught.value.error.retryable
+    assert CREDS["AccessKeyId"] not in caught.value.error.model_dump_json()

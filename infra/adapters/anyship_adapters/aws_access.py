@@ -14,6 +14,7 @@ boto3는 선택 의존성이라 처음 쓸 때 불러온다.
 """
 import json
 import uuid
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from .models import AdapterError, AwsEnvironment
@@ -35,6 +36,36 @@ def _account_of(arn: str) -> str:
     return arn.split(":")[4]
 
 
+def _aws_error(exc: Exception) -> AwsAccessError:
+    # botocore 예외 종류가 많아 이름으로 나눈다. 원문(ARN 등)은 메시지에 담지 않는다.
+    code = getattr(exc, "response", {}).get("Error", {}).get("Code")
+    if code == "AccessDenied":
+        return _fail("access_denied", "역할을 맡을 수 없습니다.",
+                     hint="역할 ARN, External ID, 사용자 계정의 신뢰 정책을 확인해 주세요.")
+    if code in ("ExpiredToken", "InvalidClientTokenId", "SignatureDoesNotMatch") \
+            or type(exc).__name__ in ("NoCredentialsError", "PartialCredentialsError"):
+        return _fail("service_credentials_unavailable", "서비스 서버의 AWS 인증 설정을 확인해야 합니다.")
+    return _fail("aws_unavailable", "AWS에 연결하지 못했습니다.", retryable=True)
+
+
+@dataclass(frozen=True)
+class TemporaryCredentials:
+    """하위 프로세스(Terraform)에 환경변수로만 전달하는 임시 자격 증명. repr과 str에는 값이 나오지 않는다."""
+
+    access_key_id: str = field(repr=False)
+    secret_access_key: str = field(repr=False)
+    session_token: str = field(repr=False)
+
+    def environ(self) -> dict[str, str]:
+        return {"AWS_ACCESS_KEY_ID": self.access_key_id, "AWS_SECRET_ACCESS_KEY": self.secret_access_key,
+                "AWS_SESSION_TOKEN": self.session_token}
+
+    def secret_values(self) -> dict[str, str]:
+        """redact에 등록할 값. 키 이름은 아무 의미가 없고 값만 쓰인다."""
+        return {"access_key_id": self.access_key_id, "secret_access_key": self.secret_access_key,
+                "session_token": self.session_token}
+
+
 class AwsAccess:
     def __init__(self, session_factory: Callable[..., Any] | None = None):
         # 인자 없이 부르면 서비스 서버의 인스턴스 역할 자격 증명, 자격 증명 인자를 주면 그 자격 증명의 세션.
@@ -47,26 +78,39 @@ class AwsAccess:
         import boto3
         return boto3.Session(**credentials)
 
-    def _assume(self, env: AwsEnvironment) -> Any:
-        """역할을 맡아 그 자격 증명으로 만든 세션을 돌려준다. 자격 증명 값은 밖으로 나가지 않는다."""
+    def _assume_role(self, env: AwsEnvironment, duration_seconds: int) -> dict[str, str]:
+        """STS로 역할을 맡아 임시 자격 증명을 받는다. 이 모듈 안에서만 쓴다."""
         try:
             sts = self._session().client("sts", region_name=env.region)
-            creds = sts.assume_role(
-                RoleArn=env.role_arn, ExternalId=env.external_id, DurationSeconds=900,
+            return sts.assume_role(
+                RoleArn=env.role_arn, ExternalId=env.external_id, DurationSeconds=duration_seconds,
                 RoleSessionName="anyship-" + uuid.uuid4().hex[:16])["Credentials"]
-            session = self._session(
+        except Exception as exc:
+            raise _aws_error(exc) from None
+
+    def _assume(self, env: AwsEnvironment) -> Any:
+        """역할을 맡아 그 자격 증명으로 만든 세션을 돌려준다. 자격 증명 값은 밖으로 나가지 않는다."""
+        creds = self._assume_role(env, 900)
+        try:
+            return self._session(
                 aws_access_key_id=creds["AccessKeyId"], aws_secret_access_key=creds["SecretAccessKey"],
                 aws_session_token=creds["SessionToken"], region_name=env.region)
-        except Exception as exc:  # botocore 예외 종류가 많아 이름으로 나눈다. 원문(ARN 등)은 메시지에 담지 않는다.
-            code = getattr(exc, "response", {}).get("Error", {}).get("Code")
-            if code == "AccessDenied":
-                raise _fail("access_denied", "역할을 맡을 수 없습니다.",
-                            hint="역할 ARN, External ID, 사용자 계정의 신뢰 정책을 확인해 주세요.") from None
-            if code in ("ExpiredToken", "InvalidClientTokenId", "SignatureDoesNotMatch") \
-                    or type(exc).__name__ in ("NoCredentialsError", "PartialCredentialsError"):
-                raise _fail("service_credentials_unavailable", "서비스 서버의 AWS 인증 설정을 확인해야 합니다.") from None
-            raise _fail("aws_unavailable", "AWS에 연결하지 못했습니다.", retryable=True) from None
-        return session
+        except Exception as exc:
+            raise _aws_error(exc) from None
+
+    def temporary_credentials(self, env: AwsEnvironment, duration_seconds: int = 3600) -> TemporaryCredentials:
+        """Terraform 같은 하위 프로세스의 환경변수로만 쓸 임시 자격 증명. 이 모듈에서 자격 증명이 나가는 유일한 통로다.
+
+        받은 쪽은 environ()을 프로세스 환경에만 넣고, 로그와 결과에 남기지 않는다. 오류 문구와 출력에서 값을 가리려면
+        secret_values()를 redact 대상에 등록한다. 시간은 15분~1시간(서비스 서버의 인스턴스 역할이 다른 역할을 맡는
+        경우의 상한)이다."""
+        if not 900 <= duration_seconds <= 3600:
+            raise ValueError("duration_seconds must be between 900 and 3600")
+        creds = self._assume_role(env, duration_seconds)
+        try:
+            return TemporaryCredentials(creds["AccessKeyId"], creds["SecretAccessKey"], creds["SessionToken"])
+        except (KeyError, TypeError):
+            raise _fail("aws_unavailable", "AWS의 임시 자격 증명 응답을 읽지 못했습니다.", retryable=True) from None
 
     def check_role(self, env: AwsEnvironment) -> str:
         """역할을 맡을 수 있으면 계정 ID를 돌려준다. 역할 ARN의 계정과 다르면 실패한다."""
