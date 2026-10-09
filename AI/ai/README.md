@@ -230,3 +230,11 @@ ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm replay
 
 검토 결함/증거와 남은 계약은 [수정 요약](../docs/review-fix-summary.md),
 A/C의 실행 조건은 [배포 명세 계약](deliverables/deploy-spec-contract.md)을 참고한다.
+
+### 서비스에 결과 전달하기 (A와 합의 전의 예제)
+
+`scripts/service_handoff.py`는 새 분석 결과를 JSON으로 전달하고 안전·비용·캐시 정보를 보존한다.
+기본 Fake, 컨테이너 미실행이며 선택 항목별 수정·웹 제공자·PR·배포는 연결하지 않는다.
+개인 출력 경로/BuildContext/원시 컨테이너 로그는 전달 JSON에서 제외하고 컨텍스트를 정리한다.
+실행 방법과 코드/SHA·항목 선택·결과 계약 및 서버 Bedrock 설정은
+[서비스 연결 다음 단계](../docs/service-connection-next.md)를 참고한다.
