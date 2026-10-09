@@ -97,6 +97,89 @@ ai/.venv/bin/python -m ai analyze samples/todo --llm bedrock \
 
 Converse를 사용한다. 지원 모델은 temperature=0이며 Sonnet 5.5/Haiku 5.5는 비기본 sampling 옵션을 생략한다. 모델 출력의 완전한 재현성을 주장하지 않는다. JSON 최초 요청+재생성 최대 2회, SDK 전송은 요청당 최대 3회이며 usage를 기록한다. 계정/Marketplace/최초 사용 접근 문제가 있으면 안전하게 분류하고 실제 AI 성공으로 숨기지 않는다.
 
+## Anthropic API 선택 실행
+
+Bedrock을 유지하면서 직접 API를 선택할 수 있다. 기본 `--llm none`, 기존 Bedrock 설정과
+`run_analysis` 함수 시그니처는 바뀌지 않는다. Python SDK는 선택 의존성이며 지연 import한다.
+
+프로젝트 루트에서 설치하고 모델을 명시한다. 지원 ID는 `claude-opus-5-5`,
+`claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`,
+`claude-haiku-4-5-20251001`이다. 알 수 없는 ID는 호출 전에 거부한다.
+
+```sh
+ai/.venv/bin/python -m pip install -e 'ai[anthropic]'
+export ANTHROPIC_MODEL_ID_STRONG=claude-sonnet-5-5
+export ANTHROPIC_MODEL_ID_FAST=claude-haiku-5-5
+export ANTHROPIC_REFUSAL_FALLBACK=off
+```
+
+API 키는 사용자의 같은 터미널에서만 입력한다. 다음은 macOS zsh의 숨김 입력이며 키를
+셸 명령문·히스토리·파일에 쓰지 않는다. 키를 채팅에 보내거나 CLI 인자로 전달하지 않는다.
+SDK의 기본 인증 해석(`ANTHROPIC_API_KEY` 또는 기존 ant 프로필)을 사용한다.
+터미널에서 export한 키는 이미 실행 중인 Codex 프로세스에 자동 전달되지 않으므로,
+설정한 터미널에서 아래 실행 명령도 실행한다.
+
+```sh
+read -rs 'ANTHROPIC_API_KEY?Anthropic API key (hidden): '
+export ANTHROPIC_API_KEY
+```
+
+먼저 **짧은 확인 호출 1회**만 한다. 앱 소스는 전송하지 않으며 schema/전송 재시도는
+모두 꺼져 있다. 결과에는 프롬프트·응답 원문·키를 저장하지 않고 모델·토큰·지연·비용·안전한
+오류 코드만 기록한다. 성공은 exit 0, 호출/설정 실패는 exit 1, 저장 실패는 exit 2다.
+
+```sh
+ai/.venv/bin/python -m ai llm-check --llm anthropic --tier fast --out out/anthropic-check-fast
+# STRONG도 선택적으로 1회 확인한다.
+ai/.venv/bin/python -m ai llm-check --llm anthropic --tier strong --out out/anthropic-check-strong
+```
+
+성공한 뒤 실제 분석을 실행한다. **소스 코드가 Anthropic으로 직접 전송된다(시크릿은 마스킹).**
+기존 탐지·변환 범위 검사·JSON/pydantic 검증과 게이트/PR 판정은 그대로 적용한다.
+이 `--no-gate` 실행은 컨테이너 검증을 생략하므로 배포 성공이나 PR 승인 근거가 아니다.
+
+```sh
+ai/.venv/bin/python -m ai analyze samples/todo --llm anthropic --no-gate \
+  --save-llm-trace --out out/anthropic-todo
+```
+
+Sonnet 5.5의 strong effort 기본값은 medium, fast는 low다. Haiku 5.5는 disabled thinking과
+low/medium/high effort만 허용한다. 5.5는 temperature/top_p/top_k를 생략한다.
+4.6/4.5는 temperature=0이다. Opus 5.5를 비교하려면 strong 모델을
+`claude-opus-5-5`로 바꾼다. Opus thinking은 항상 켜져 있으며 max_tokens 기본값/최소값은
+16000이다. 이 값은 응답 상한이고 실제 사용량만 과금 추정에 반영한다.
+`ANTHROPIC_EFFORT_STRONG`/`ANTHROPIC_EFFORT_FAST`로 effort를 선택할 수 있다.
+Sonnet/Haiku는 low/medium/high, Opus는 추가로 xhigh/max를 지원한다.
+
+refusal fallback의 클라이언트 기본값은 `default`이며 Opus/Sonnet 5.5에만 공식 beta API를
+적용한다. 위 비교 예시는 모델 비교를 위해 `off`다. `default`로 바꾸면 실제 응답 모델과
+`usage.fallback_ran`, `usage.served_by_fallback`, per-model `usage.iterations`를 trace에 기록한다.
+최종 refusal과 max_tokens는 자동 재호출하지 않는다. fallback은 거절 복구용이며
+인증·rate limit·서버 오류를 다른 모델로 우회하지 않는다.
+
+일반 분석은 JSON 최초 요청+재생성 최대 2회, 전송 시도 최대 3회다. SDK 재시도는 0으로
+설정했다. 429·5xx·연결 오류만 지수 백오프/Retry-After로 재시도한다. 타임아웃과
+400/401/403/404는 재시도하지 않는다. Retry-After가 60초를 넘으면 너무 일찍 재호출하지
+않고 실패를 반환한다. SDK timeout은 호출당 60초이며 전체 분석 90초를 보장하지 않는다.
+
+`--artifact-llm anthropic`은 Dockerfile/명세 제안의 추가 유료 호출을 선택한다.
+record는 `--llm record --llm-provider anthropic --llm-fixtures <별도 경로>`로 선택할 수 있다.
+기존 replay/fixture/데모 캐시는 갱신하지 않는다.
+
+`cost.json`은 [Anthropic 공식 가격](https://platform.claude.com/docs/en/about-claude/pricing)을
+2026-10-09에 확인한 standard/global 직접 API의 USD 추정치다(청구서 아님).
+Opus 5.5 입력/출력 $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50,
+Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5이며 단위는 100만 토큰이다.
+Haiku 5.5는 전체 프롬프트가 100,000토큰을 초과하면 $0.50/$2.50을 적용한다.
+캐시 read/5m/1h 사용량과 요금도 분리 계산한다. 캐시 duration 정보 누락, 장문 Haiku의
+캐시 요금, 미등록 응답 모델, earlier refusal의 청구 여부는 추측하지 않고 null로 남긴다.
+fallback은 cost.calls에 실제 모델별 시도를 기록하며 trace의 iterations와 대조한다.
+API 응답의 input_tokens는 캐시 토큰을 제외하므로 캐시 사용량은 trace도 함께 확인한다.
+Bedrock 모델/추론 프로필의 미등록 요금은 기존대로 null이다.
+
+구조화 출력 `output_config.format`은 이번에 사용하지 않는다. SDK가 해당 필드를
+지원하므로 후속 적용은 가능하지만 현재는 JSON 프롬프트와 pydantic 검증을 사용한다.
+
 ## Docker 선택 실행
 
 ```sh
