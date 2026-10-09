@@ -6,6 +6,7 @@ import './workflow.css';
 import { ChangeWorkflow } from './ChangeWorkflow';
 import { RepositoryConnect } from './RepositoryConnect';
 import { AwsEnvironments } from './AwsEnvironments';
+import { DeleteRegistration } from './DeleteRegistration';
 import { api, ApiError, mutation, type ConnectionDraft, type Project } from './api';
 
 type Config = { demo: boolean; github_configured: boolean; ai_mode: string; aws_available: boolean; aws_regions: string[] };
@@ -88,6 +89,13 @@ function App() {
   }, [me]);
 
   async function openConnected(projectId: string) { await refreshProjects(); navigate('project/' + projectId); }
+  async function removeProject(project: Project) {
+    try {
+      await api(`/projects/${project.id}`, mutation(me!.csrf_token, {}, 'DELETE'));
+      setProjects(items => items.filter(item => item.id !== project.id));
+      navigate('projects');
+    } catch (e) { sessionError(e); throw e; }
+  }
   async function logout() {
     if (!me) return;
     setBusy(true);
@@ -114,13 +122,18 @@ function App() {
     <div className="sidebar-foot"><div className="local-status">{config?.ai_mode === 'placeholder' ? '테스트 모드 · AI 임시 항목 사용' : 'AI 분석 기능 준비 중'}</div><button className="logout" disabled={busy} onClick={logout}><LogOut size={16}/> 로그아웃</button></div></aside>
     <div className="main-area"><header className="app-header"><span>개인 워크스페이스 <ChevronRight size={14}/> {screen === 'aws' ? 'AWS 환경' : screen === 'projects' ? '프로젝트' : screen === 'connect' ? '저장소 연결' : detail?.full_name.split('/').pop() ?? '프로젝트'}</span><span className="avatar">{me.user.name.slice(0, 1)}</span></header>
     <main className="content">{alert}
-      {screen === 'aws' ? <AwsEnvironments key={me.workspace.id + ':' + me.user.login} csrf={me.csrf_token} available={config?.aws_available ?? false} regions={config?.aws_regions ?? []} workspaceKey={me.workspace.id + ':' + me.user.login} environmentId={route.startsWith('aws/') ? route.slice(4) : null} onSelect={id => navigate(id ? 'aws/' + id : 'aws')} onError={sessionError}/> : !projectsReady ? <p role="status"><LoaderCircle size={16} className="spin"/> 내 프로젝트를 불러오고 있습니다.</p> : <>
+      {screen === 'aws' ? <AwsEnvironments key={me.workspace.id + ':' + me.user.login} csrf={me.csrf_token} workspaceKey={me.workspace.id + ':' + me.user.login} environmentId={route.startsWith('aws/') ? route.slice(4) : null} onSelect={id => navigate(id ? 'aws/' + id : 'aws')} onError={sessionError}/> : !projectsReady ? <p role="status"><LoaderCircle size={16} className="spin"/> 내 프로젝트를 불러오고 있습니다.</p> : <>
         {screen === 'projects' && <><div className="page-heading"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>내 프로젝트</h1><p>저장소에서 시작해 검토 가능한 PR까지.</p></div><button className="primary" onClick={() => navigate('connect')}><Plus size={17}/> 프로젝트 연결</button></div>
           {projects.length === 0 ? <div className="empty-state"><div className="empty-art"><FolderGit2 size={40}/><span className="tiny-plus">+</span></div><h2>첫 프로젝트를 연결해 보세요</h2><p>GitHub 저장소 주소만 준비하세요.<br/>접근 승인부터 브랜치 선택까지 안내합니다.</p><button className="primary" onClick={() => navigate('connect')}><Github size={18}/> 저장소 URL로 연결</button></div> : <div className="project-grid">{projects.map(project => <button className="project-card" key={project.id} onClick={() => navigate('project/' + project.id)}><div className="project-card-top"><FolderGit2 size={22}/><span className="status"><Check size={12}/> 등록됨</span></div><h2>{project.full_name.split('/').pop()}</h2><p>{project.full_name}</p><div className="project-card-bottom"><span><GitBranch size={14}/> {project.branch}</span><ArrowRight size={17}/></div></button>)}</div>}
           <div className="roadmap"><div><span className="step-number">01</span><h3>저장소 연결</h3><p>주소와 접근 권한을 확인합니다.</p></div><div><span className="step-number">02</span><h3>수정 항목 실행</h3><p>{config?.ai_mode === 'placeholder' ? '테스트에서는 임시 수정 항목을 사용합니다.' : 'AI 분석 기능은 준비 중입니다.'}</p></div><div><span className="step-number">03</span><h3>변경 검토 · PR</h3><p>내용을 확인하고 GitHub에 제출합니다.</p></div></div>
         </>}
         {screen === 'connect' && <RepositoryConnect csrf={me.csrf_token} returnState={returnState} onReturnHandled={() => setReturnState(null)} onConnected={openConnected} onError={sessionError}/>}
-        {screen === 'detail' && (detail ? <><div className="page-heading"><div><span className="eyebrow">PROJECT</span><h1>{detail.full_name.split('/').pop()}</h1><a className="text-link" href={`https://github.com/${detail.full_name}`} target="_blank" rel="noreferrer">{detail.full_name} <ExternalLink size={13}/></a></div><span className="status"><GitBranch size={14}/> {detail.branch}</span></div><ChangeWorkflow key={detail.id} projectId={detail.id} csrf={me.csrf_token} aiMode={config?.ai_mode ?? 'unavailable'} request={api} onError={sessionError}/><button className="text-link" onClick={() => navigate('projects')}>프로젝트 목록으로 돌아가기 <ArrowRight size={15}/></button></> : <div className="empty-state"><h2>프로젝트를 찾을 수 없습니다</h2><p>현재 계정에서 접근할 수 있는 프로젝트를 확인해 주세요.</p><button className="secondary" onClick={() => navigate('projects')}>내 프로젝트 보기</button></div>)}
+        {screen === 'detail' && (detail ? <><div className="page-heading"><div><span className="eyebrow">PROJECT</span><h1>{detail.full_name.split('/').pop()}</h1><a className="text-link" href={`https://github.com/${detail.full_name}`} target="_blank" rel="noreferrer">{detail.full_name} <ExternalLink size={13}/></a></div><span className="status"><GitBranch size={14}/> {detail.branch}</span></div><ChangeWorkflow key={detail.id} projectId={detail.id} csrf={me.csrf_token} aiMode={config?.ai_mode ?? 'unavailable'} request={api} onError={sessionError}/>
+          <div className="registration-actions"><button className="text-link" onClick={() => navigate('projects')}>프로젝트 목록으로 돌아가기 <ArrowRight size={15}/></button>
+            <DeleteRegistration key={detail.id} label="저장소 연결 삭제" name={detail.full_name}
+              description="AnyShip의 프로젝트 연결과 분석·검토 기록을 삭제합니다. GitHub 원본 저장소, 브랜치, PR은 그대로 유지되며 저장소를 다시 연결할 수 있습니다."
+              onDelete={() => removeProject(detail)}/></div>
+        </> : <div className="empty-state"><h2>프로젝트를 찾을 수 없습니다</h2><p>현재 계정에서 접근할 수 있는 프로젝트를 확인해 주세요.</p><button className="secondary" onClick={() => navigate('projects')}>내 프로젝트 보기</button></div>)}
       </>}
     </main><footer className="app-footer">AnyShip<span>변경은 검토하고, 배포는 다음 단계로.</span></footer></div>
   </div>;

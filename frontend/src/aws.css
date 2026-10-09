@@ -1,5 +1,7 @@
 .aws-setup{display:flex;gap:13px;align-items:flex-start;padding:19px 22px;margin-bottom:26px;border:1px solid #d7d9dc;background:#f0f1f2;border-radius:10px;color:#45484d}
 .aws-setup>svg{flex-shrink:0;margin-top:2px}.aws-setup strong{font-size:13px}.aws-setup p{font-size:12px;margin:7px 0 0}
+.aws-setup-list{list-style:none;padding:0;margin:14px 0;font-size:12px}.aws-setup-list li{display:flex;flex-wrap:wrap;gap:12px;margin:7px 0}.aws-setup-list span{color:#8a4e26}.aws-setup button{margin-top:14px;font-size:12px}
+.aws-role-actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:20px}.aws-role-actions button{font-size:12px}.aws-role-actions>span{display:flex;align-items:center;gap:6px;font-size:12px;color:#73777e}
 .aws-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(270px,1fr);gap:24px;align-items:start}
 .aws-flow,.aws-summary{display:flex;flex-direction:column;gap:20px;min-width:0}.aws-flow .panel,.aws-summary .panel{margin:0;min-width:0}
 .aws-page label{display:block;font-size:12px;margin:18px 0 8px;color:#555a60}.aws-page input,.aws-page select{width:100%;min-width:0;border:1px solid #d7d9dc;background:#fff;color:#202124;border-radius:7px;padding:12px;font-size:13px}

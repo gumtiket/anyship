@@ -89,6 +89,7 @@ class AwsEnvironment(Base):
     stack_name: Mapped[str] = mapped_column(String(128))
     role_name: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
+    submitted_role_arn: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     role_arn: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     aws_account_id: Mapped[str | None] = mapped_column(String(12), nullable=True)
     error_code: Mapped[str] = mapped_column(String(64), default="")

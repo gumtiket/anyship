@@ -49,8 +49,15 @@ class Settings:
             raise ValueError("Production requires GitHub App configuration.")
 
     @property
+    def aws_setup_issues(self):
+        # Expose only missing setting names, never role, template or credential values.
+        required = {"template": self.aws_template_url, "service_role": self.aws_service_role_arn,
+                    "regions": self.aws_regions, "live_mode": not self.demo}
+        return [name for name, value in required.items() if not value]
+
+    @property
     def aws_configured(self):
-        return bool(self.aws_template_url and self.aws_service_role_arn and self.aws_regions) and not self.demo
+        return not self.aws_setup_issues
 
     @property
     def github_configured(self):

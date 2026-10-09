@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -19,7 +19,7 @@ from .config import Settings
 from .db import CodeChange, DemoChange, LoginSession, Membership, OAuthAttempt, Project, RepositoryConnection, User, Workspace, database
 from .github_api import DemoGitHub, GitHubAPI, GitHubFailure
 from . import aws_onboarding, code_changes, demo_changes, onboarding
-from .aws_adapter import STSAdapter
+from .aws_adapter import AwsAdapter
 
 auth_logger = logging.getLogger("anyship.auth")
 
@@ -47,7 +47,7 @@ class DemoReviewInput(BaseModel):
     review_hash: str = Field(min_length=64, max_length=64)
 
 
-def create_app(settings: Settings, gateway=None, aws_adapter=None):
+def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None = None):
     engine, sessions = database(settings.database_url)
     cipher = Fernet(settings.token_key.encode() if settings.token_key else Fernet.generate_key())
     github = gateway or (DemoGitHub() if settings.demo else GitHubAPI())
@@ -109,7 +109,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter=None):
             raise HTTPException(401, "다시 로그인해 주세요.") from None
 
     app.include_router(onboarding.router(settings, github, db, current, mutation, access_token))
-    app.include_router(aws_onboarding.router(settings, aws_adapter if aws_adapter is not None else STSAdapter(), db, current, mutation))
+    app.include_router(aws_onboarding.router(settings, aws_adapter, db, current, mutation))
 
     def installations(login):
         return github.installations(access_token(login))
@@ -155,7 +155,9 @@ def create_app(settings: Settings, gateway=None, aws_adapter=None):
     def config():
         return {"demo": settings.demo, "github_configured": settings.github_configured,
                 "aws_available": settings.aws_configured,
-                "aws_regions": list(settings.aws_regions) if settings.aws_configured else [],
+                "aws_verification_available": settings.aws_configured and aws_adapter is not None,
+                "aws_regions": list(settings.aws_regions),
+                "aws_setup_issues": settings.aws_setup_issues,
                 "ai_available": False, "ai_mode": settings.ai_mode, "demo_changes_available": settings.demo,
                 "callback_url": settings.app_origin + "/api/auth/github/callback"}
 
@@ -280,6 +282,28 @@ def create_app(settings: Settings, gateway=None, aws_adapter=None):
         if not row:
             raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
         return project_json(row)
+
+    @app.delete("/api/projects/{project_id}", status_code=204)
+    def delete_project(project_id: str, login=Depends(mutation), session=Depends(db)):
+        project = session.scalar(select(Project).where(
+            Project.id == project_id, Project.workspace_id == login.workspace_id,
+        ).with_for_update())
+        if project is None:
+            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+        # Conditional deletes compete with workflow claims on the same rows.
+        # Keep all changes in one transaction so a busy child rolls back cleanup.
+        session.execute(delete(CodeChange).where(
+            CodeChange.project_id == project_id, CodeChange.lease_until <= int(time.time()),
+        ))
+        session.execute(delete(DemoChange).where(
+            DemoChange.project_id == project_id, DemoChange.status.notin_(("applying", "publishing")),
+        ))
+        if (session.scalar(select(CodeChange.id).where(CodeChange.project_id == project_id))
+                or session.scalar(select(DemoChange.id).where(DemoChange.project_id == project_id))):
+            raise HTTPException(409, "작업 처리 중입니다. 완료 후 저장소 연결을 삭제해 주세요.")
+        session.delete(project)
+        session.commit()
+        return Response(status_code=204)
 
     @app.post("/api/projects", status_code=201)
     def add_project(body: ProjectInput, login=Depends(mutation), session=Depends(db)):

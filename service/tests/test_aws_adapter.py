@@ -9,8 +9,9 @@ from botocore.exceptions import NoCredentialsError, ReadTimeoutError
 from botocore.stub import Stubber
 import pytest
 
-from app import aws_adapter
-from app.aws_adapter import AwsCheckError, STSAdapter
+from app import aws_sts_adapter as aws_adapter
+from app.aws_adapter import AwsCheckError
+from app.aws_sts_adapter import STSAdapter
 
 ROLE = "arn:aws:iam::123456789012:role/path/deploy-service-role"
 EXTERNAL = "e" * 64
