@@ -1,4 +1,3 @@
-import fcntl
 import os
 import re
 import subprocess
@@ -64,6 +63,8 @@ class DockerCliRunner:
         )
 
     def preflight(self) -> None:
+        if os.name != "posix":
+            raise RunnerError("docker_gate_requires_posix")
         if self._call(["info", "--format", "{{.ServerVersion}}"], timeout=10).code:
             raise RunnerError("docker_daemon_unavailable")
         for image in (POSTGRES_IMAGE, CURL_IMAGE):
@@ -71,6 +72,12 @@ class DockerCliRunner:
                 raise RunnerError(f"prepull_required:{image}")
 
     def build(self, root: Path, tag: str) -> CommandResult:
+        if os.name != "posix":
+            raise RunnerError("docker_gate_requires_posix")
+        # Only the real Docker runner needs POSIX locks. Offline analysis and
+        # FakeRunner must remain importable on Windows service hosts.
+        import fcntl
+
         if not re.fullmatch(r"bronze-ai-gate:gate-[a-f0-9]{24}", tag):
             raise ValueError("gate_image_tag_invalid")
         directory = Path(gettempdir()) / "bronze-ai-gate-locks"

@@ -91,6 +91,15 @@ class GitHubAPI:
             "tree": [{"path": filename, "mode": "100644", "type": "blob", "content": content}],
         })["sha"]
 
+    def recursive_tree(self, token, name, sha):
+        data = self.get(token, f"/repos/{name}/git/trees/{quote(sha, safe='')}", {"recursive": "1"})
+        if data.get("truncated"):
+            raise GitHubFailure(409)
+        return data
+
+    def blob(self, token, name, sha):
+        return self.get(token, f"/repos/{name}/git/blobs/{quote(sha, safe='')}")
+
     def create_commit(self, token, name, base_sha, tree_sha, message):
         return self.post(token, f"/repos/{name}/git/commits", {
             "message": message, "tree": tree_sha, "parents": [base_sha],

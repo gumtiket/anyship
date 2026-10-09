@@ -152,6 +152,28 @@ class MockJob(Base):
     finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
+class AIAnalysis(Base):
+    __tablename__ = "ai_analyses"
+    __table_args__ = (UniqueConstraint("project_id", "request_id", name="uq_ai_analysis_request"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    # NULL for terminal jobs: one active job per project, including across workers.
+    active_project_id: Mapped[str | None] = mapped_column(String(36), unique=True, nullable=True)
+    request_id: Mapped[str] = mapped_column(String(36))
+    status: Mapped[str] = mapped_column(String(24), default="queued")
+    base_sha: Mapped[str] = mapped_column(String(40), default="")
+    base_tree: Mapped[str] = mapped_column(String(40), default="")
+    source_digest: Mapped[str] = mapped_column(String(64), default="")
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    diff: Mapped[str] = mapped_column(Text, default="")
+    logs_json: Mapped[str] = mapped_column(Text, default="[]")
+    review_hash: Mapped[str] = mapped_column(String(64), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
 class DemoChange(Base):
     __tablename__ = "demo_changes"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
