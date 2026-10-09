@@ -18,7 +18,7 @@ from .compose_host import ComposeHost, wait_healthy
 from .dns import DnsError, WildcardRecords
 from .models import (APP_NAME_PATTERN, IMAGE_TAG_PATTERN, AdapterError, CheckResult, DeployResult, DestroyResult,
                      LogEvent, OnpremEnvironment, Secrets, Spec, StatusResult)
-from .redact import make_safe_log, redact_text
+from .redact import make_safe_log, redact_model, redact_text
 from .sets import ONPREM, SetName
 from .spec import SpecError, parse_spec
 from .ssh import CommandResult, SshConnection, SshRunner
@@ -102,6 +102,7 @@ class OnpremAdapter:
         safe = make_safe_log(log, known)
 
         def fail(error: AdapterError, result: CommandResult | None = None) -> DeployResult:
+            error = redact_model(error, known)  # 오류 문구에 비밀이 섞여 들어와도 결과로 나가지 않게 한다
             safe(LogEvent(level="error", message=error.message))
             details = {"stderr": redact_text(result.stderr[-500:], known)} if result and result.stderr else {}
             return DeployResult(ok=False, error=error, image_tag=image_tag, details=details)
@@ -254,6 +255,25 @@ class OnpremAdapter:
         removed = host.remove_dir(app)
         if not removed.ok:
             return DestroyResult(ok=False, error=_err("destroy_failed", "앱 디렉터리를 지우지 못했습니다."))
+        return DestroyResult(ok=True)
+
+    def remove_environment_dns(self, env: OnpremEnvironment, log: LogFn) -> DestroyResult:
+        """환경의 DNS 레코드를 지운다. Adapter 인터페이스에는 없고, 환경 전체를 지울 때 서비스가 따로 부른다.
+
+        레코드는 환경의 모든 앱이 함께 쓰므로 `destroy(app)`는 지우지 않는다. 호출하는 쪽이 이 환경에
+        남은 앱이 없을 때만 불러야 한다(어댑터는 남은 앱을 세지 않는다). 서버에 접속하지 않는다.
+        """
+        if self._dns is None:
+            _step(log, 1, 1, "DNS 제거", "DNS 자동 설정이 꺼져 있어 건너뜁니다")
+            return DestroyResult(ok=True)
+        _step(log, 1, 1, "DNS 제거", "환경의 DNS 레코드를 지우는 중(약 30초)")
+        try:
+            removed = self._dns.remove(env.env_id)
+        except DnsError as exc:
+            error = redact_model(exc.error)
+            log(LogEvent(level="error", message=error.message))
+            return DestroyResult(ok=False, error=error)
+        log(LogEvent(message="DNS 레코드를 지웠습니다." if removed else "지울 DNS 레코드가 없습니다."))
         return DestroyResult(ok=True)
 
 
