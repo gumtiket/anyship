@@ -126,3 +126,39 @@ def test_deploy_and_status_results_carry_their_extras():
     assert StatusResult(ok=True, state="running").state == "running"
     with pytest.raises(ValidationError):
         StatusResult(ok=True, state="flying")
+
+
+# --- state_bucket (Terraform state 버킷) -----------------------------------------------------------
+BUCKET = "anyship-tfstate-123456789012-ap-northeast-2-2b9b6060"  # ROLE_ARN의 계정(123456789012)과 같은 계정
+
+
+def test_state_bucket_is_optional_and_accepts_the_names_the_template_creates():
+    assert aws().state_bucket is None
+    for name in (BUCKET, "anyship-tfstate-123456789012-us-east-1-0123abcd",
+                 "anyship-tfstate-123456789012-ap-southeast-2-ffffffff"):
+        assert aws(state_bucket=name).state_bucket == name
+
+
+@pytest.mark.parametrize("name", [
+    "anyship-tfstate-123456789012-ap-northeast-2-2B9B6060",  # 대문자
+    "anyship-tfstate-123456789012-ap-northeast-2-2b9b606",  # 접미사 7자
+    "anyship-tfstate-123456789012-ap-northeast-2-2b9b60601",  # 접미사 9자
+    "anyship-tfstate-123456789012-ap-northeast-2",  # 접미사 없음
+    "anyship-tfstate-12345678901-ap-northeast-2-2b9b6060",  # 계정 ID 11자리
+    "other-tfstate-123456789012-ap-northeast-2-2b9b6060",  # 접두사만 다르고 나머지는 올바른 이름
+    "evil-bucket-123456789012-ap-northeast-2-2b9b6060",
+    "other-bucket", "", " " + BUCKET, BUCKET + "\n", BUCKET + "/../other", BUCKET + " --evil",
+])
+def test_state_bucket_rejects_anything_but_the_template_naming(name):
+    with pytest.raises(ValidationError):
+        aws(state_bucket=name)
+
+
+def test_state_bucket_of_another_account_is_rejected():
+    with pytest.raises(ValidationError, match="same account"):
+        aws(state_bucket="anyship-tfstate-999999999999-ap-northeast-2-2b9b6060")
+
+
+def test_state_bucket_is_kept_when_the_environment_is_parsed_from_stored_data():
+    row = {"kind": "aws", "env_id": "demo", "role_arn": ROLE_ARN, "external_id": EXTERNAL_ID, "state_bucket": BUCKET}
+    assert TypeAdapter(Environment).validate_python(row).state_bucket == BUCKET
