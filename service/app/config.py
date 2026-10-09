@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -8,6 +9,13 @@ from sqlalchemy.engine import make_url
 from .aws_validation import validate_aws_settings
 
 DEFAULT_DATABASE_URL = "postgresql+psycopg://anyship@127.0.0.1:55432/anyship"
+
+
+def analysis_runtime_issue():
+    # The unchanged AI package imports POSIX-only fcntl at startup.
+    if sys.platform == "win32":
+        return "현재 서버에서는 새 AI 분석을 실행할 수 없습니다. 관리자가 Linux 환경에서 서비스를 실행해야 합니다. 기존 분석 이력과 검토한 수정안은 계속 확인·저장할 수 있습니다."
+    return None
 
 
 @dataclass(frozen=True)
@@ -40,10 +48,10 @@ class Settings:
         validate_aws_settings(self.aws_template_url, self.aws_service_role_arn, self.aws_regions)
         if not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", self.aws_role_name.replace("{id}", "0" * 32)):
             raise ValueError("APP_AWS_ROLE_NAME must be an IAM role name, optionally containing {id}.")
-        if self.ai_mode not in ("placeholder", "unavailable"):
-            raise ValueError("APP_AI_MODE must be placeholder or unavailable.")
-        if self.production and self.ai_mode == "placeholder":
-            raise ValueError("AI placeholder is only available in development.")
+        if self.ai_mode not in ("placeholder", "unavailable", "fake", "bedrock"):
+            raise ValueError("APP_AI_MODE must be placeholder, fake, bedrock or unavailable.")
+        if self.production and self.ai_mode in ("placeholder", "fake"):
+            raise ValueError("AI placeholder/fake is only available in development.")
         origin = urlsplit(self.app_origin)
         if origin.scheme not in ("http", "https") or not origin.netloc or origin.path or origin.query or origin.fragment:
             raise ValueError("APP_APP_ORIGIN must be an origin without a trailing slash.")
@@ -55,6 +63,15 @@ class Settings:
             raise ValueError("APP_GITHUB_APP_SLUG must be a GitHub App slug.")
         if self.production and not self.github_configured:
             raise ValueError("Production requires GitHub App configuration.")
+
+    @property
+    def ai_configured(self):
+        return self.ai_mode == "fake" or (self.ai_mode == "bedrock" and all(os.getenv(key, "").strip()
+            for key in ("BEDROCK_REGION", "BEDROCK_MODEL_ID_STRONG", "BEDROCK_MODEL_ID_FAST")))
+
+    @property
+    def ai_runtime_issue(self):
+        return analysis_runtime_issue() if self.ai_mode in ("fake", "bedrock") else None
 
     @property
     def aws_setup_issues(self):
