@@ -31,7 +31,7 @@ def test_set_names_match_the_ai_side():
     assert set(SET_NAMES) == {"aws-serverless", "aws-always-on", "onprem"}
 
 
-# --- environments ------------------------------------------------------------------
+# --- 환경 ------------------------------------------------------------------
 def test_aws_environment_defaults():
     env = aws()
     assert env.kind == "aws"
@@ -41,11 +41,11 @@ def test_aws_environment_defaults():
 @pytest.mark.parametrize(
     "override",
     [
-        {"role_arn": "arn:aws:iam::123:role/x"},  # account id must be 12 digits
-        {"role_arn": "arn:aws:iam::123456789012:user/someone"},  # roles only
-        {"external_id": "short"},  # at least 16 characters
+        {"role_arn": "arn:aws:iam::123:role/x"},  # 계정 ID는 12자리여야 한다
+        {"role_arn": "arn:aws:iam::123456789012:user/someone"},  # 역할(role)만 허용
+        {"external_id": "short"},  # 16자 이상
         {"external_id": "has space inside the id!!"},
-        {"env_id": "Demo"},  # lowercase only
+        {"env_id": "Demo"},  # 소문자만 허용
         {"region": "mars"},
     ],
 )
@@ -78,7 +78,7 @@ def test_environment_union_picks_the_class_from_kind():
 
 def test_environments_reject_unknown_and_secret_looking_fields():
     with pytest.raises(ValidationError):
-        # Split so secret scanners do not flag this fixture as a real key header.
+        # 비밀 스캐너가 실제 키 머리글로 오탐하지 않도록 문자열을 나눠서 만든다.
         onprem(ssh_private_key="-----BEGIN " + "OPENSSH PRIVATE KEY" + "-----")
     with pytest.raises(ValidationError):
         aws(access_key="AKIA...")
@@ -90,7 +90,7 @@ def test_environments_are_immutable():
         env.region = "us-east-1"
 
 
-# --- log events ----------------------------------------------------------------------
+# --- 로그 이벤트 ----------------------------------------------------------------------
 def test_log_event_defaults_and_step_bounds():
     event = LogEvent(message="hello")
     assert event.level == "info" and event.ts.tzinfo is not None
@@ -103,7 +103,7 @@ def test_log_event_defaults_and_step_bounds():
         LogEvent(message="x", level="debug")
 
 
-# --- results ---------------------------------------------------------------------------
+# --- 결과 ---------------------------------------------------------------------------
 def test_result_is_either_ok_or_failed_with_an_error():
     assert CheckResult(ok=True).error is None
     failure = CheckResult(ok=False, error=AdapterError(code="ssh_unreachable", message="cannot connect"))

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anyship-adapters"
 version = "0.1.0"
-description = "Deployment adapters: the interface the service calls, a mock, and the real environment adapters"
+description = "배포 어댑터: 서비스가 호출하는 인터페이스, mock, 환경별 실제 어댑터"
 requires-python = ">=3.10"
 dependencies = ["pydantic>=2.5,<3"]
 

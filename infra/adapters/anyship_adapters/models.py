@@ -1,11 +1,11 @@
-"""Data the service and the adapters exchange.
+"""서비스와 어댑터가 주고받는 데이터.
 
-Rules this module enforces by construction:
-  * An environment holds only values that are safe to store in the service DB
-    (role ARN, External ID, host name). Private keys and tokens never appear here.
-  * A result is either ok or carries an error, never both and never neither.
-  * Log events carry structured data, but anything secret is the adapter's job to
-    keep out of them (see redact.py).
+이 모듈이 구조로 강제하는 규칙:
+  * 환경에는 서비스 DB에 저장해도 되는 값(역할 ARN, External ID, 서버 주소)만
+    담는다. 개인 키와 토큰은 절대 들어가지 않는다.
+  * 결과는 성공이거나, 오류를 담은 실패 중 하나다. 둘 다이거나 둘 다 아닌 경우는 없다.
+  * 로그 이벤트는 구조화된 데이터를 담을 수 있지만, 비밀을 걸러내는 일은
+    어댑터의 몫이다(redact.py 참고).
 """
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Mapping, Union
@@ -13,15 +13,17 @@ from typing import Annotated, Any, Literal, Mapping, Union
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 ENV_ID_PATTERN = r"^[a-z][a-z0-9-]{1,20}$"
+APP_NAME_PATTERN = r"^[a-z][a-z0-9-]{2,62}$"  # DNS 라벨, Compose 프로젝트 이름, Lambda 이름으로 쓰인다
+IMAGE_TAG_PATTERN = r"^[0-9a-f]{7,40}$"  # 커밋 SHA
 
 
 class AdapterModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-# --- environments ------------------------------------------------------------------
+# --- 환경 -----------------------------------------------------------------------------
 class AwsEnvironment(AdapterModel):
-    """A user's AWS account, reached through the cross-account deploy role."""
+    """사용자의 AWS 계정. 교차 계정 배포 역할로 접근한다."""
 
     kind: Literal["aws"] = "aws"
     env_id: str = Field(pattern=ENV_ID_PATTERN)
@@ -31,7 +33,7 @@ class AwsEnvironment(AdapterModel):
 
 
 class OnpremEnvironment(AdapterModel):
-    """A server the user prepared once (Docker, deploy account, our public key)."""
+    """사용자가 한 번 준비해 둔 서버(Docker, 배포 계정, 우리 공개 키)."""
 
     kind: Literal["onprem"] = "onprem"
     env_id: str = Field(pattern=ENV_ID_PATTERN)
@@ -42,16 +44,16 @@ class OnpremEnvironment(AdapterModel):
 
 Environment = Annotated[Union[AwsEnvironment, OnpremEnvironment], Field(discriminator="kind")]
 
-# Deploy spec as produced by the AI side. The adapter does not trust it: it
-# re-validates every field it acts on (names, commands, sizes).
+# AI 쪽이 만든 배포 명세. 어댑터는 이 값을 믿지 않는다. 자신이 사용하는 모든
+# 필드(이름, 명령, 크기)를 직접 다시 검증한다.
 Spec = Mapping[str, Any]
 
-# Secret values for one deploy (name -> value). Held in memory only: not stored in
-# the service DB, not logged, not echoed in results.
+# 한 번의 배포에 쓰는 비밀 값(이름 -> 값). 메모리에만 있고 서비스 DB, 로그,
+# 결과에 남기지 않는다.
 Secrets = Mapping[str, str]
 
 
-# --- progress log --------------------------------------------------------------------
+# --- 진행 로그 ---------------------------------------------------------------------------
 class LogEvent(AdapterModel):
     ts: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     level: Literal["info", "warn", "error"] = "info"
@@ -68,11 +70,11 @@ class LogEvent(AdapterModel):
         return self
 
 
-# --- results ---------------------------------------------------------------------------
+# --- 결과 ---------------------------------------------------------------------------------
 class AdapterError(AdapterModel):
-    code: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")  # machine readable, e.g. ssh_unreachable
-    message: str = Field(max_length=2000)  # shown to the user
-    hint: str | None = Field(default=None, max_length=2000)  # what the user can do about it
+    code: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")  # 기계가 읽는 코드(예: ssh_unreachable)
+    message: str = Field(max_length=2000)  # 사용자에게 보여 줄 메시지
+    hint: str | None = Field(default=None, max_length=2000)  # 사용자가 할 수 있는 조치
     retryable: bool = False
 
 
