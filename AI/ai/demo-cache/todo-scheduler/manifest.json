@@ -2,7 +2,7 @@
   "format_version": 1,
   "sample": "todo-scheduler",
   "code_hash": "9c7fa2393dfbbed3be5fe05a7d89779520ba28f1001b53bd195ff20bfc5d1a53",
-  "engine_hash": "c15ccb08e1ade310919988accf41eb32de2bbc696259a6a3da1f6c4eb96cf7a3",
+  "engine_hash": "4202745fcffcb0f51dc1475398b6249664a2d28169db66dea3f9dd46f6cccc7d",
   "settings": {
     "target_env": "aws",
     "commit": null,
@@ -21,8 +21,8 @@
     "Dockerfile": "6e8eb3df1849e89b0490123dd3902f32461dbbfb250f688ff991242e776ad108",
     "deploy-spec.yaml": "bfee448f53c1b228e0736e8ae949de9eb53e0b725aa65f4ff6cd5b618942428a",
     "recommendation.json": "c89bc93b8c4e494cade337fc4822725ffad0e9b21cf60a6934e738fc28ab03af",
-    "gate-report.json": "c0268cfff69ec9d6fa78ffc1bb60a8131f4d3639b61cae7d6cbf5e995fc3e77f",
-    "cost.json": "59cca55723852900c5ba1956acfbce4e9a84de8ff2c3b158445af6b0ca39d60f"
+    "gate-report.json": "8fb1bef95763a24e75be407133b03a8a74da8a08460a82c816ed80a5b6368298",
+    "cost.json": "0782819f8bed378b9865c97b827391796a85846cec66128ca1b423fbf6e8c110"
   },
   "result": {
     "status": "diagnosed",
@@ -394,59 +394,59 @@
           {
             "name": "preflight",
             "status": "passed",
-            "duration_s": 0.7411961670150049,
+            "duration_s": 0.15881558402907103,
             "log": "Docker/helpers 준비 확인"
           },
           {
             "name": "build",
             "status": "passed",
-            "duration_s": 0.9025594589766115,
-            "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.4s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.4s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.83kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 3/7] WORKDIR /app\n#8 CACHED\n\n#9 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#9 CACHED\n\n#10 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#10 CACHED\n\n#11 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#11 CACHED\n\n#12 [stage-0 4/7] COPY requirements*.txt ./\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:8c70461c8f1e08bb7ea44cf02e9a374f384c127849ac364a885c22be393b5d83 done\n#14 exporting config sha256:2c3a1e2f8456392a504bea83278d833b5e09a49e07edcff64eda98010cd76295 done\n#14 exporting attestation manifest sha256:188dbde4e29204278706af7b905d620276554ca18802457855ba7c87854703a3 0.0s done\n#14 exporting manifest list sha256:2e5bdb186a58ca2b7038e3eab3413ccd70eee762f5203f5b6480c94ffc772bb7 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec 0.2s done\n#14 DONE 0.3s"
+            "duration_s": 0.7465112919453532,
+            "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.3s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#5 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#5 DONE 0.0s\n\n#6 [internal] load build context\n#6 transferring context: 11.83kB done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 3/7] WORKDIR /app\n#8 CACHED\n\n#9 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#9 CACHED\n\n#10 [stage-0 4/7] COPY requirements*.txt ./\n#10 CACHED\n\n#11 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#11 CACHED\n\n#12 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:8c70461c8f1e08bb7ea44cf02e9a374f384c127849ac364a885c22be393b5d83 done\n#14 exporting config sha256:2c3a1e2f8456392a504bea83278d833b5e09a49e07edcff64eda98010cd76295 done\n#14 exporting attestation manifest sha256:8fdda6678485f892dc4db796e781306f87b99c58701919e28e4e1dd1a76fb3a6 done\n#14 exporting manifest list sha256:26682d5d857c98be3b7ae7b8df06ccff7091ce7b3a37fd2eccc9069bf4e535ee done\n#14 naming to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec 0.2s done\n#14 DONE 0.2s"
           },
           {
             "name": "network",
             "status": "passed",
-            "duration_s": 0.019821833004243672,
+            "duration_s": 0.02070804196409881,
             "log": "internal network"
           },
           {
             "name": "postgres",
             "status": "passed",
-            "duration_s": 0.14717095898231491,
-            "log": "bronze-gate-4257390a3c8d-db"
+            "duration_s": 0.14252929197391495,
+            "log": "bronze-gate-53fa584eda77-db"
           },
           {
             "name": "postgres_ready",
             "status": "passed",
-            "duration_s": 1.458145584037993,
-            "log": "bronze-gate-4257390a3c8d-db:5432 - accepting connections"
+            "duration_s": 1.4786212500184774,
+            "log": "bronze-gate-53fa584eda77-db:5432 - accepting connections"
           },
           {
             "name": "migrate",
             "status": "passed",
-            "duration_s": 0.5893291659886017,
+            "duration_s": 0.522257249976974,
             "log": ""
           },
           {
             "name": "app_start",
             "status": "passed",
-            "duration_s": 0.09646983299171552,
-            "log": "bronze-gate-4257390a3c8d-app"
+            "duration_s": 0.09603612497448921,
+            "log": "bronze-gate-53fa584eda77-app"
           },
           {
             "name": "healthcheck",
             "status": "passed",
-            "duration_s": 1.471176208986435,
+            "duration_s": 1.421974208962638,
             "log": "{\"status\":\"ok\"}"
           },
           {
             "name": "postgres_crud",
             "status": "passed",
-            "duration_s": 3.140521416964475,
+            "duration_s": 3.142768374993466,
             "log": "임시 Postgres 저장·조회·앱 재기동 후 조회·수정·삭제 확인"
           }
         ],
-        "logs": "INFO:     172.21.0.4:39056 - \"GET /healthz HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39064 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39070 - \"PUT /todos/1 HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39072 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:43862 - \"DELETE /todos/1 HTTP/1.1\" 204 No Content\nINFO:     172.21.0.4:43872 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     Started server process [1]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)",
+        "logs": "INFO:     172.21.0.4:41974 - \"GET /healthz HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:41980 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:41994 - \"PUT /todos/1 HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:42004 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:42016 - \"DELETE /todos/1 HTTP/1.1\" 204 No Content\nINFO:     172.21.0.4:42018 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     Started server process [1]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)",
         "matched_patterns": [],
         "cleanup_errors": [],
         "image_tag": "bronze-ai-gate:gate-264b4ee47c8a2f422b311aec"
@@ -457,14 +457,14 @@
           {
             "name": "original_build",
             "status": "passed",
-            "duration_s": 0.7617351249791682,
-            "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.3s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.38kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#8 CACHED\n\n#9 [stage-0 3/7] WORKDIR /app\n#9 CACHED\n\n#10 [stage-0 4/7] COPY requirements*.txt ./\n#10 CACHED\n\n#11 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#11 CACHED\n\n#12 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:76a8d7dbe752ee42511f4ec2376f7de42eef88b81c20f89ce3eeab7f489026d4 done\n#14 exporting config sha256:ceb60c73871a8897d0851523edcc3f469c36920d6ce45651b6d689d3f4387a24 done\n#14 exporting attestation manifest sha256:330f176616a6c96e26eceae9bc6271ff5ba7d6e1f96226da2948c15b225585e9 0.0s done\n#14 exporting manifest list sha256:59ba16771ef3fc4164c6c48b5ba8051e42f5f3cc746d3ea879ae763fb7cff702 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 0.2s done\n#14 DONE 0.2s"
+            "duration_s": 0.786791542021092,
+            "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.4s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.38kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 4/7] COPY requirements*.txt ./\n#8 CACHED\n\n#9 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#9 CACHED\n\n#10 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#10 CACHED\n\n#11 [stage-0 3/7] WORKDIR /app\n#11 CACHED\n\n#12 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:76a8d7dbe752ee42511f4ec2376f7de42eef88b81c20f89ce3eeab7f489026d4 done\n#14 exporting config sha256:ceb60c73871a8897d0851523edcc3f469c36920d6ce45651b6d689d3f4387a24 done\n#14 exporting attestation manifest sha256:4afe36d61c60b098430e02c1afac6e3bf93e397804aa09b236d35698b40dd3c0 done\n#14 exporting manifest list sha256:936cf3695ab452ec3a40250735c142d8cf739c47b7b85cb0d0936a601f1d38aa done\n#14 naming to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 0.2s done\n#14 DONE 0.2s"
           },
           {
             "name": "original_start",
             "status": "passed",
-            "duration_s": 0.17318416596390307,
-            "log": "bronze-gate-4257390a3c8d-original"
+            "duration_s": 0.12482475000433624,
+            "log": "bronze-gate-53fa584eda77-original"
           }
         ],
         "logs": "INFO:     Started server process [1]\nINFO:     Waiting for application startup.\nERROR:    Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/starlette/routing.py\", line 654, in lifespan\n    async with self.lifespan_context(app) as maybe_state:\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/contextlib.py\", line 210, in __aenter__\n    return await anext(self.gen)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/main.py\", line 31, in lifespan\n    handler = logging.FileHandler(\"app.log\")\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1231, in __init__\n    StreamHandler.__init__(self, self._open())\n                                 ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1263, in _open\n    return open_func(self.baseFilename, self.mode,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/app/app.log'\n\nERROR:    Application startup failed. Exiting.",
@@ -488,59 +488,59 @@
               {
                 "name": "preflight",
                 "status": "passed",
-                "duration_s": 0.7411961670150049,
+                "duration_s": 0.15881558402907103,
                 "log": "Docker/helpers 준비 확인"
               },
               {
                 "name": "build",
                 "status": "passed",
-                "duration_s": 0.9025594589766115,
-                "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.4s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.4s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.83kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 3/7] WORKDIR /app\n#8 CACHED\n\n#9 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#9 CACHED\n\n#10 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#10 CACHED\n\n#11 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#11 CACHED\n\n#12 [stage-0 4/7] COPY requirements*.txt ./\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:8c70461c8f1e08bb7ea44cf02e9a374f384c127849ac364a885c22be393b5d83 done\n#14 exporting config sha256:2c3a1e2f8456392a504bea83278d833b5e09a49e07edcff64eda98010cd76295 done\n#14 exporting attestation manifest sha256:188dbde4e29204278706af7b905d620276554ca18802457855ba7c87854703a3 0.0s done\n#14 exporting manifest list sha256:2e5bdb186a58ca2b7038e3eab3413ccd70eee762f5203f5b6480c94ffc772bb7 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec 0.2s done\n#14 DONE 0.3s"
+                "duration_s": 0.7465112919453532,
+                "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.3s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#5 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#5 DONE 0.0s\n\n#6 [internal] load build context\n#6 transferring context: 11.83kB done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 3/7] WORKDIR /app\n#8 CACHED\n\n#9 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#9 CACHED\n\n#10 [stage-0 4/7] COPY requirements*.txt ./\n#10 CACHED\n\n#11 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#11 CACHED\n\n#12 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:8c70461c8f1e08bb7ea44cf02e9a374f384c127849ac364a885c22be393b5d83 done\n#14 exporting config sha256:2c3a1e2f8456392a504bea83278d833b5e09a49e07edcff64eda98010cd76295 done\n#14 exporting attestation manifest sha256:8fdda6678485f892dc4db796e781306f87b99c58701919e28e4e1dd1a76fb3a6 done\n#14 exporting manifest list sha256:26682d5d857c98be3b7ae7b8df06ccff7091ce7b3a37fd2eccc9069bf4e535ee done\n#14 naming to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-264b4ee47c8a2f422b311aec 0.2s done\n#14 DONE 0.2s"
               },
               {
                 "name": "network",
                 "status": "passed",
-                "duration_s": 0.019821833004243672,
+                "duration_s": 0.02070804196409881,
                 "log": "internal network"
               },
               {
                 "name": "postgres",
                 "status": "passed",
-                "duration_s": 0.14717095898231491,
-                "log": "bronze-gate-4257390a3c8d-db"
+                "duration_s": 0.14252929197391495,
+                "log": "bronze-gate-53fa584eda77-db"
               },
               {
                 "name": "postgres_ready",
                 "status": "passed",
-                "duration_s": 1.458145584037993,
-                "log": "bronze-gate-4257390a3c8d-db:5432 - accepting connections"
+                "duration_s": 1.4786212500184774,
+                "log": "bronze-gate-53fa584eda77-db:5432 - accepting connections"
               },
               {
                 "name": "migrate",
                 "status": "passed",
-                "duration_s": 0.5893291659886017,
+                "duration_s": 0.522257249976974,
                 "log": ""
               },
               {
                 "name": "app_start",
                 "status": "passed",
-                "duration_s": 0.09646983299171552,
-                "log": "bronze-gate-4257390a3c8d-app"
+                "duration_s": 0.09603612497448921,
+                "log": "bronze-gate-53fa584eda77-app"
               },
               {
                 "name": "healthcheck",
                 "status": "passed",
-                "duration_s": 1.471176208986435,
+                "duration_s": 1.421974208962638,
                 "log": "{\"status\":\"ok\"}"
               },
               {
                 "name": "postgres_crud",
                 "status": "passed",
-                "duration_s": 3.140521416964475,
+                "duration_s": 3.142768374993466,
                 "log": "임시 Postgres 저장·조회·앱 재기동 후 조회·수정·삭제 확인"
               }
             ],
-            "logs": "INFO:     172.21.0.4:39056 - \"GET /healthz HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39064 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39070 - \"PUT /todos/1 HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:39072 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:43862 - \"DELETE /todos/1 HTTP/1.1\" 204 No Content\nINFO:     172.21.0.4:43872 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     Started server process [1]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)",
+            "logs": "INFO:     172.21.0.4:41974 - \"GET /healthz HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:41980 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:41994 - \"PUT /todos/1 HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:42004 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     172.21.0.4:42016 - \"DELETE /todos/1 HTTP/1.1\" 204 No Content\nINFO:     172.21.0.4:42018 - \"GET /todos HTTP/1.1\" 200 OK\nINFO:     Started server process [1]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)",
             "matched_patterns": [],
             "cleanup_errors": [],
             "image_tag": "bronze-ai-gate:gate-264b4ee47c8a2f422b311aec"
@@ -551,14 +551,14 @@
               {
                 "name": "original_build",
                 "status": "passed",
-                "duration_s": 0.7617351249791682,
-                "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.3s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.38kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#8 CACHED\n\n#9 [stage-0 3/7] WORKDIR /app\n#9 CACHED\n\n#10 [stage-0 4/7] COPY requirements*.txt ./\n#10 CACHED\n\n#11 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#11 CACHED\n\n#12 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:76a8d7dbe752ee42511f4ec2376f7de42eef88b81c20f89ce3eeab7f489026d4 done\n#14 exporting config sha256:ceb60c73871a8897d0851523edcc3f469c36920d6ce45651b6d689d3f4387a24 done\n#14 exporting attestation manifest sha256:330f176616a6c96e26eceae9bc6271ff5ba7d6e1f96226da2948c15b225585e9 0.0s done\n#14 exporting manifest list sha256:59ba16771ef3fc4164c6c48b5ba8051e42f5f3cc746d3ea879ae763fb7cff702 done\n#14 naming to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 0.2s done\n#14 DONE 0.2s"
+                "duration_s": 0.786791542021092,
+                "log": "#0 building with \"desktop-linux\" instance using docker driver\n\n#1 [internal] load build definition from Dockerfile\n#1 transferring dockerfile: 629B done\n#1 DONE 0.0s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 ...\n\n#3 [internal] load metadata for public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0\n#3 DONE 0.3s\n\n#2 [internal] load metadata for docker.io/library/python:3.12-slim\n#2 DONE 0.4s\n\n#4 [internal] load .dockerignore\n#4 transferring context: 219B done\n#4 DONE 0.0s\n\n#5 [internal] load build context\n#5 transferring context: 11.38kB done\n#5 DONE 0.0s\n\n#6 FROM public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1\n#6 resolve public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0@sha256:17cfd08eff1dfea3f6a9a1e9c65fdac80aa4919b6085e746615530f43f57d2f1 0.0s done\n#6 DONE 0.0s\n\n#7 [stage-0 1/7] FROM docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f\n#7 resolve docker.io/library/python:3.12-slim@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f 0.0s done\n#7 DONE 0.0s\n\n#8 [stage-0 4/7] COPY requirements*.txt ./\n#8 CACHED\n\n#9 [stage-0 5/7] RUN pip install --no-cache-dir -r requirements.txt\n#9 CACHED\n\n#10 [stage-0 6/7] RUN groupadd --gid 10001 app && useradd --uid 10001 --gid app --no-create-home app\n#10 CACHED\n\n#11 [stage-0 3/7] WORKDIR /app\n#11 CACHED\n\n#12 [stage-0 2/7] COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:1.1.0 /lambda-adapter /opt/extensions/lambda-adapter\n#12 CACHED\n\n#13 [stage-0 7/7] COPY --chown=10001:10001 . .\n#13 CACHED\n\n#14 exporting to image\n#14 exporting layers done\n#14 exporting manifest sha256:76a8d7dbe752ee42511f4ec2376f7de42eef88b81c20f89ce3eeab7f489026d4 done\n#14 exporting config sha256:ceb60c73871a8897d0851523edcc3f469c36920d6ce45651b6d689d3f4387a24 done\n#14 exporting attestation manifest sha256:4afe36d61c60b098430e02c1afac6e3bf93e397804aa09b236d35698b40dd3c0 done\n#14 exporting manifest list sha256:936cf3695ab452ec3a40250735c142d8cf739c47b7b85cb0d0936a601f1d38aa done\n#14 naming to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 done\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406\n#14 unpacking to docker.io/library/bronze-ai-gate:gate-4d6fb779ccee7c2fe8717406 0.2s done\n#14 DONE 0.2s"
               },
               {
                 "name": "original_start",
                 "status": "passed",
-                "duration_s": 0.17318416596390307,
-                "log": "bronze-gate-4257390a3c8d-original"
+                "duration_s": 0.12482475000433624,
+                "log": "bronze-gate-53fa584eda77-original"
               }
             ],
             "logs": "INFO:     Started server process [1]\nINFO:     Waiting for application startup.\nERROR:    Traceback (most recent call last):\n  File \"/usr/local/lib/python3.12/site-packages/starlette/routing.py\", line 654, in lifespan\n    async with self.lifespan_context(app) as maybe_state:\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/contextlib.py\", line 210, in __aenter__\n    return await anext(self.gen)\n           ^^^^^^^^^^^^^^^^^^^^^\n  File \"/app/app/main.py\", line 31, in lifespan\n    handler = logging.FileHandler(\"app.log\")\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1231, in __init__\n    StreamHandler.__init__(self, self._open())\n                                 ^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.12/logging/__init__.py\", line 1263, in _open\n    return open_func(self.baseFilename, self.mode,\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 30] Read-only file system: '/app/app.log'\n\nERROR:    Application startup failed. Exiting.",
@@ -581,56 +581,56 @@
       "calls": [
         {
           "stage": "diagnose",
-          "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-          "input_tokens": 3823,
-          "output_tokens": 1290,
-          "cost_usd": null,
-          "latency_s": 8.588625834032428
+          "model_id": "replay:global.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cost_usd": 0.0,
+          "latency_s": 0.0
         },
         {
           "stage": "recommend",
-          "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-          "input_tokens": 496,
-          "output_tokens": 140,
-          "cost_usd": null,
-          "latency_s": 1.4884606249979697
+          "model_id": "replay:global.anthropic.claude-haiku-4-5-20251001-v1:0",
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cost_usd": 0.0,
+          "latency_s": 0.0
         }
       ],
       "stages": {
         "diagnose": {
           "calls": 1,
-          "input_tokens": 3823,
-          "output_tokens": 1290,
-          "cost_usd": null,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cost_usd": 0.0,
           "known_cost_usd": 0.0,
-          "pricing_complete": false,
+          "pricing_complete": true,
           "unobserved_requests": 0,
           "usage_complete": true
         },
         "recommend": {
           "calls": 1,
-          "input_tokens": 496,
-          "output_tokens": 140,
-          "cost_usd": null,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cost_usd": 0.0,
           "known_cost_usd": 0.0,
-          "pricing_complete": false,
+          "pricing_complete": true,
           "unobserved_requests": 0,
           "usage_complete": true
         }
       },
       "total": {
         "calls": 2,
-        "input_tokens": 4319,
-        "output_tokens": 1430,
-        "cost_usd": null,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_usd": 0.0,
         "known_cost_usd": 0.0,
-        "pricing_complete": false,
+        "pricing_complete": true,
         "unobserved_requests": 0,
         "usage_complete": true
       },
-      "execution_source": "current_run",
+      "execution_source": "llm_replay",
       "historical": false,
-      "external_calls": null
+      "external_calls": 0
     },
     "output_files": {
       "diagnosis.json": "diagnosis.json",
@@ -768,16 +768,16 @@
       }
     ],
     "timings_s": {
-      "scan": 0.00986508303321898,
-      "diagnosis": 8.595941499981564,
-      "analysis": 8.605806583014783,
-      "transform": 0.10631108400411904,
-      "packaging": 0.0360785000375472,
-      "recommendation": 1.4911155000445433,
-      "gate": 10.62593412498245,
-      "total": 20.872629416000564
+      "scan": 0.008693708048667759,
+      "diagnosis": 0.0014548329636454582,
+      "analysis": 0.010148541012313217,
+      "transform": 0.06901179201668128,
+      "packaging": 0.03073145798407495,
+      "recommendation": 0.001245833991561085,
+      "gate": 9.817737708974164,
+      "total": 9.935849375033285
     },
-    "execution_source": "current_run"
+    "execution_source": "llm_replay"
   },
   "events": [
     {
@@ -790,7 +790,7 @@
     },
     {
       "stage": "분석 중",
-      "message": "diagnosis 완료: 8.596초"
+      "message": "diagnosis 완료: 0.001초"
     },
     {
       "stage": "분석 중",
@@ -798,7 +798,7 @@
     },
     {
       "stage": "분석 중",
-      "message": "transform 완료: 0.106초"
+      "message": "transform 완료: 0.069초"
     },
     {
       "stage": "분석 중",
@@ -806,7 +806,7 @@
     },
     {
       "stage": "분석 중",
-      "message": "packaging 완료: 0.036초"
+      "message": "packaging 완료: 0.031초"
     },
     {
       "stage": "분석 중",
@@ -814,7 +814,7 @@
     },
     {
       "stage": "분석 중",
-      "message": "recommendation 완료: 1.491초"
+      "message": "recommendation 완료: 0.001초"
     },
     {
       "stage": "검증 중",
@@ -874,7 +874,7 @@
     },
     {
       "stage": "검증 중",
-      "message": "gate 완료: 10.626초"
+      "message": "gate 완료: 9.818초"
     },
     {
       "stage": "분석 중",
@@ -890,10 +890,17 @@
     },
     {
       "stage": "분석 중",
-      "message": "전체 완료: 20.873초"
+      "message": "전체 완료: 9.936초"
     }
   ],
-  "provenance": "Actual Bedrock responses and Docker sample gate; historical result",
-  "llm_execution_source": "current_run",
-  "recorded_llm_usage": null
+  "provenance": "Historical Bedrock responses replayed with identical request hashes; current Docker sample gate; no new Bedrock calls",
+  "llm_execution_source": "llm_replay",
+  "recorded_llm_usage": {
+    "calls": 2,
+    "input_tokens": 4319,
+    "output_tokens": 1430,
+    "cost_usd": null,
+    "historical": true,
+    "new_external_calls": 0
+  }
 }

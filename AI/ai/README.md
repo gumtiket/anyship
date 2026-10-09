@@ -108,7 +108,7 @@ ai/.venv/bin/python -m pytest -m docker ai/tests/test_gate.py ai/tests/test_reco
 
 해시로 확인한 두 자체 샘플의 임시 변환본만 실행한다. Linux 이미지, nonroot/read-only/tmpfs, internal network, cap-drop/no-new-privileges, CPU/메모리/PID 제한을 적용한다. 부모 시크릿/실제 DB와 Docker socket을 컨테이너에 전달하지 않는다. 마이그레이션 명령은 빈 DB용 `python -m app.migrate`로 제한하며 기존 스키마 업그레이드나 데이터 복사를 하지 않는다.
 
-Dockerfile은 Python 3.12-slim, LWA 1.1.0, PORT=8080, readiness `/healthz`를 사용한다. 이미지 내용에 SHA/시각/랜덤 값을 넣지 않는다. 외부 태그와 `source.commit`은 추적 메타데이터다. 동일 이미지 재사용과 재빌드 동일성을 구분하며 대상 플랫폼은 C가 확정하고 재검증해야 한다. 러너는 현재 macOS/Linux POSIX 잠금을 사용한다.
+Dockerfile은 Python 3.12-slim, LWA 1.1.0, PORT=8080, readiness `/healthz`를 사용한다. 이미지 내용에 SHA/시각/랜덤 값을 넣지 않는다. 외부 태그와 `source.commit`은 추적 메타데이터다. 동일 이미지 재사용과 재빌드 동일성을 구분하며 대상 플랫폼은 C가 확정하고 재검증해야 한다. 러너는 현재 macOS/Linux POSIX 잠금을 사용한다. Windows에서는 오프라인 분석·Fake 러너를 사용할 수 있지만 실제 Docker 게이트는 `docker_gate_requires_posix` 오류로 거부한다. 임시 작업 공간·빌드 컨텍스트·출력 파일은 UTF-8 및 LF/CRLF 바이트를 보존한다.
 
 게이트는 최초 포함 최대 3회 실행한다. 기존 Python 파일/고정 Dockerfile 템플릿 안의 수정만 허용하며 공개 API·데이터 모델·환경변수 계약·보안 조건의 변경은 거부한다. 의존성 파일을 임의로 바꾸는 복구는 지원하지 않는다. 수정안은 apply 검사/컴파일 뒤 재검증하고 시도별 원인·수정 요약·중단 사유를 GateReport에 남긴다. 보안 제약은 [체크리스트](../docs/gate-security-checklist.md)를 따른다.
 
