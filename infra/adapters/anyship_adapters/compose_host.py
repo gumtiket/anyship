@@ -66,8 +66,10 @@ class ComposeHost:
             loaded = self._ssh.run(["docker", "load"], stdin=save.stdout, timeout=timeout)
         finally:
             save.stdout.close()
-        if loaded.timed_out:
+        if loaded.timed_out:  # 로컬 docker save도 멈추고, 결과는 실패가 아니라 시간 초과로 알린다
             save.kill()
+            save.wait()
+            return loaded
         errors = save.stderr.read().decode("utf-8", errors="replace")[:MAX_OUTPUT]
         code = save.wait()
         return loaded if code == 0 else CommandResult(code, stderr=errors)

@@ -141,3 +141,17 @@ def test_empty_commands_and_nul_bytes_are_rejected_before_running(args):
     with pytest.raises(ValueError):
         runner.run(args)
     assert fake.calls == []
+
+
+def test_a_stream_can_be_piped_in_without_loading_it_into_memory():
+    runner, fake = make()
+    stream = object()  # 실제 파이프 대신 같은 객체가 그대로 전달되는지만 본다
+    runner.run(["docker", "load"], stdin=stream)
+    assert fake.kwargs["stdin"] is stream and "input" not in fake.kwargs
+
+
+def test_input_and_stdin_cannot_be_combined():
+    runner, fake = make()
+    with pytest.raises(ValueError):
+        runner.run(["cat"], input="x", stdin=object())
+    assert fake.calls == []
