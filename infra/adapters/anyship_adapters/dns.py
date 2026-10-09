@@ -74,7 +74,11 @@ class WildcardRecords:
 
     def _api(self) -> Any:
         if self._client is None:
-            import boto3
+            try:
+                import boto3
+            except ImportError:
+                raise _fail("dns_unavailable", "boto3가 설치되어 있지 않아 DNS 레코드를 바꿀 수 없습니다.",
+                            hint="서비스 서버에서 `pip install \"anyship-adapters[aws]\"`로 설치해 주세요.") from None
             self._client = boto3.client("route53")
         return self._client
 
