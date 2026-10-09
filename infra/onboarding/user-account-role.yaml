@@ -42,9 +42,57 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AdministratorAccess
 
+  # 공용 기반 Terraform의 state를 보관하는 버킷. state에는 리소스 ID와 네트워크 구성이 들어
+  # 있어 민감하므로, 서비스 계정이 아니라 사용자 계정에 둔다. 이름은 계정 ID와 리전에서 정해져서
+  # 서비스가 따로 저장하지 않아도 된다(anyship-tfstate-<계정ID>-<리전>, 최대 43자).
+  # 스택을 지워도 버킷은 남는다(비어 있지 않으면 삭제가 실패하므로 Retain). 정리 방법은 README 참고.
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub anyship-tfstate-${AWS::AccountId}-${AWS::Region}
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # 잘못 덮어쓴 state를 되돌릴 수 있게 한다.
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - BucketKeyEnabled: true
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  StateBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StateBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: s3:*
+            Resource:
+              - !GetAtt StateBucket.Arn
+              - !Sub ${StateBucket.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: "false"
+
 Outputs:
   RoleArn:
     Description: Register this ARN (and the External ID) in the service.
     Value: !GetAtt DeployRole.Arn
   AccountId:
     Value: !Ref AWS::AccountId
+  StateBucketName:
+    Description: Terraform state bucket (derived from account ID and region).
+    Value: !Ref StateBucket
