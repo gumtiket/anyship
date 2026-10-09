@@ -1,4 +1,4 @@
-"""Credential-free, bounded subprocess for the development fake AI provider."""
+"""Bounded analysis subprocess. Repository code is data; container gates stay disabled."""
 import json
 import sys
 from pathlib import Path
@@ -25,11 +25,18 @@ def analyze(request):
             raise ValueError("source_changed")
 
     check_source()
-    client = FakeLLMClient({
-        "diagnose": ['{"explanations":[],"candidates":[]}'],
-        "recommend": [recommendation_response],
-        "transform": ['{"diff":"","violation_ids":[]}'],
-    })
+    provider = request.get("provider", "fake")
+    if provider == "bedrock":
+        from ai.llm.bedrock import BedrockClient
+        client = BedrockClient(schema_retries=1, transport_attempts=1)
+    elif provider == "fake":
+        client = FakeLLMClient({
+            "diagnose": ['{"explanations":[],"candidates":[]}'],
+            "recommend": [recommendation_response],
+            "transform": ['{"diff":"","violation_ids":[]}'],
+        })
+    else:
+        raise ValueError("unsupported_provider")
     result = run_analysis(root, out_dir=request["output"], commit=request["base_sha"],
         source_repo="https://github.com/" + request["repository"], app_name=request["app_name"],
         llm=client, decision_llm=client, no_gate=True, log=lambda *_: None)
@@ -52,10 +59,11 @@ def analyze(request):
         if masker.contains_sensitive(diff) or redact_text(diff) != diff:
             raise ValueError("sensitive_patch")
         gate = result.gate_report
-        result.cost.external_calls = 0  # This worker can only construct FakeLLMClient.
+        if provider == "fake":
+            result.cost.external_calls = 0
         payload = {
-            "contract_status": "service_fake_bundle_v1",
-            "llm_mode": "fake", "base_sha": request["base_sha"],
+            "contract_status": "service_branch_bundle_v1" if request.get("work_branch") else "service_fake_bundle_v1",
+            "llm_mode": provider, "base_sha": request["base_sha"],
             "analysis_status": result.status,
             "diagnosis": result.diagnosis.model_dump(mode="json"),
             "transformation": result.transformation.model_dump(mode="json"),
@@ -71,7 +79,7 @@ def analyze(request):
                 "deploy-spec.yaml": Path(result.output_files["deploy-spec.yaml"]).read_text(encoding="utf-8"),
             },
             "bundle": {"id": "all-changes", "paths": sorted(paths), "patch_valid": bool(diff)},
-            "integration": {"selection_mapping": "whole_bundle", "publication": "disabled", "deployment": "disabled"},
+            "integration": {"selection_mapping": "whole_bundle", "publication": "work_branch_review_required" if request.get("work_branch") else "disabled", "deployment": "disabled"},
         }
         if gate.status != "skipped" or gate.pr_eligible:
             raise ValueError("unexpected_gate")

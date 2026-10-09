@@ -1,5 +1,11 @@
 # AnyShip AI 연결 경계
 
+## 브랜치 작업 확장 (#35)
+
+현재 UI는 기준 브랜치 선택 → 새 작업 브랜치 생성 → AI 분석·검토·커밋 흐름을 사용한다. `create_branch: true` 요청은 Fake 모드에서도 실제 GitHub 브랜치·커밋을 만든다. `bedrock` 모드와 0009 마이그레이션, 권한·실패 복구·API는 [서비스 가이드](../service/README.md#기준-브랜치--새-작업-브랜치--ai-수정-커밋-35)를 따른다. 빌드와 배포는 실행하지 않는다.
+
+아래 #28 내용은 `create_branch`를 생략한 기존 Fake 분석·검토 API의 설명이다. 해당 API는 원격 저장소를 변경하지 않는다. 공통 작업 임대는 현재 600초이며, Bedrock 작업의 subprocess 제한은 420초다. `/api/config.ai_available`은 실제 모델 모드와 모델 설정 유무를 나타내며 호출 성공이나 IAM 권한을 보증하지 않는다.
+
 ## Fake 연결 검증 (#28)
 
 `APP_AI_MODE=fake`는 GitHub에서 권한 확인한 기준 SHA의 코드를 실제 AI 규칙/변환 파이프라인에 전달한다. 모델 응답만 FakeLLMClient의 사전 값을 사용한다. AWS·Bedrock·Docker를 호출하지 않으며, 앱 실행이나 원격 저장소 변경을 하지 않는다.
@@ -10,9 +16,9 @@ PR #24의 전달 제안을 참고해 진단·변환·추천·gate·미확정 비
 
 1. `service/`에서 `python -m pip install -r requirements-dev.txt`. 같은 저장소의 AI/ai와 infra/adapters를 함께 설치한다. Python 3.12 이상과 Git이 필요하다.
 2. `service/.env.github.local`에 `APP_AI_MODE=fake`를 설정한다. 기존 실제 GitHub 로그인 설정을 사용한다.
-3. 대상 DB를 확인하고 `python -m alembic upgrade head`로 0008을 적용한다. ai_analyses 테이블만 추가하며 기존 작업은 보존한다.
+3. 대상 DB를 확인하고 `python -m alembic upgrade head`로 최신 0009까지 적용한다. 기존 작업은 보존한다.
 4. `frontend/`에서 `pnpm build` 후 기존 서버를 재시작한다.
-5. 프로젝트 상세 → **기준 커밋으로 새 분석** → 진단/보류/추천/전체 diff 확인 → 묶음 선택 → **선택한 묶음 검토 기록**.
+5. 기존 API만 확인하려면 아래의 `{request_id: UUID}` 요청을 사용한다. 현재 UI는 새 작업 브랜치를 먼저 생성하고 검토 후 커밋하는 #35 흐름이다.
 
 원격 호출 없는 브라우저 검증: service/에서 `python -m tests.browser_fixture --ai` 후 http://127.0.0.1:8001/_test_only/login. 임시 DB와 샘플 코드의 GitHub HTTP 대역을 사용하는 별도 테스트 실행기다. 운영 로그인 경로에 테스트 인증을 추가하지 않는다.
 
@@ -56,9 +62,9 @@ Service가 최종 diff의 크기·경로·기준 코드 적용 가능성·문법
 - unavailable: 새 분석·수정/게시 차단. 기존 분석 조회는 소유자에게 제공한다.
 - 운영 환경에서는 fake/placeholder를 모두 거부한다.
 
-/api/config.ai_available은 실제 모델 제공자가 없어 false다. ai_analysis_available과 ai_mode=fake로 연결 검증 기능을 구분한다.
+Fake 모드에서 /api/config.ai_available은 false다. ai_analysis_available과 ai_mode=fake로 개발용 기능을 구분한다.
 
-Bedrock 인증/모델 연결, 항목별 modify, 다중 파일 PR 게시, 실제 빌드·배포는 후속 범위다. fake 결과를 실행 검증·자동 승인으로 사용하지 않는다.
+Bedrock 연결은 #35에서 추가했다. 항목별 modify, 다중 파일 PR 게시, 실제 빌드·배포는 후속 범위다. fake 결과를 실행 검증·자동 승인으로 사용하지 않는다.
 
 검증: service/에서 `python -m pytest tests/test_ai_analyses.py tests/test_real_workflow.py tests/test_registration_deletion.py tests/test_aws_config_migration.py -q`. AI 줄바꿈 경계는 AI/에서 `python -m pytest ai/tests/test_windows_handoff.py -q`.
 

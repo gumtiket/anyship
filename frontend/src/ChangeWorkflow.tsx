@@ -8,14 +8,14 @@ type Change = {
   pr_url: string; pr_number: number; busy: boolean; error: string;
 };
 type Props = {
-  projectId: string; csrf: string; aiMode: string;
+  projectId: string; csrf: string; aiMode: string; repository: string; sourceBranch: string;
   request: <T>(path: string, options?: RequestInit) => Promise<T>;
   onError: (error: unknown) => void;
 };
 
-export function ChangeWorkflow({ projectId, csrf, aiMode, request, onError }: Props) {
-  if (aiMode === 'fake') return <AIAnalysis projectId={projectId} csrf={csrf} onError={onError}/>;
-  return <PlaceholderWorkflow projectId={projectId} csrf={csrf} aiMode={aiMode} request={request} onError={onError}/>;
+export function ChangeWorkflow(props: Props) {
+  if (props.aiMode !== 'placeholder') return <AIAnalysis {...props}/>;
+  return <PlaceholderWorkflow {...props}/>;
 }
 
 function PlaceholderWorkflow({ projectId, csrf, aiMode, request, onError }: Props) {

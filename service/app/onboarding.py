@@ -21,7 +21,7 @@ def repository_name(url):
         raise HTTPException(422, "https://github.com/소유자/저장소 형식의 URL을 입력해 주세요.") from None
 
 
-def inspect_access(github, token, name, demo=False):
+def inspect_access(github, token, name, demo=False, *, require_pr=True):
     """Only report facts visible through this user's App token, including revocation."""
     owner = name.split("/")[0].lower()
     matching = [i for i in github.installations(token) if i["account"]["login"].lower() == owner]
@@ -38,8 +38,10 @@ def inspect_access(github, token, name, demo=False):
             if not repo.get("permissions", {}).get("push"):
                 return {"status": "write_required", "message": "이 저장소의 코드를 수정할 권한이 없습니다. 저장소 관리자에게 쓰기 권한을 요청해 주세요."}
             permissions = installation.get("permissions", {})
-            if not demo and any(permissions.get(key) != "write" for key in ("contents", "pull_requests")):
-                return {"status": "permissions_required", "message": "AnyShip에 코드 변경과 PR 생성 권한 승인이 필요합니다. GitHub에서 요청된 권한을 확인해 주세요. 권한 요청이 보이지 않으면 서비스 관리자에게 문의해 주세요."}
+            required = ("contents", "pull_requests") if require_pr else ("contents",)
+            if not demo and any(permissions.get(key) != "write" for key in required):
+                operation = "코드 변경과 PR 생성" if require_pr else "코드 변경"
+                return {"status": "permissions_required", "message": f"AnyShip에 {operation} 권한 승인이 필요합니다. GitHub에서 요청된 권한을 확인해 주세요. 권한 요청이 보이지 않으면 서비스 관리자에게 문의해 주세요."}
             return {"status": "ready", "installation_id": installation["id"], "repository": repo}
     # GitHub hides inaccessible private repositories; do not claim they do not exist.
     return {"status": "authorization_required", "message": "이 저장소에 접근할 수 없습니다. 주소가 맞는지 확인한 뒤 GitHub에서 이 저장소의 접근을 허용해 주세요. 조직 저장소는 관리자 승인이 필요할 수 있습니다."}
@@ -79,7 +81,8 @@ def router(settings, github, db, current, mutation, access_token):
 
     def inspect(draft, login, session):
         token = access_token(login)
-        result = inspect_access(github, token, repository_name(draft.repository_url), settings.demo)
+        result = inspect_access(github, token, repository_name(draft.repository_url), settings.demo,
+            require_pr=settings.ai_mode not in ("fake", "bedrock"))
         if result["status"] == "ready":
             repo = result["repository"]
             project = session.scalar(select(Project).where(

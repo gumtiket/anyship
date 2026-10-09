@@ -116,6 +116,16 @@ class GitHubAPI:
     def create_ref(self, token, name, branch, sha):
         return self.post(token, f"/repos/{name}/git/refs", {"ref": f"refs/heads/{branch}", "sha": sha})
 
+    def create_changes_tree(self, token, name, base_tree, entries):
+        return self.post(token, f"/repos/{name}/git/trees", {"base_tree": base_tree, "tree": entries})["sha"]
+
+    def update_ref(self, token, name, branch, sha):
+        return self._request("PATCH", f"https://api.github.com/repos/{name}/git/refs/heads/{quote(branch, safe='')}",
+            json={"sha": sha, "force": False}, headers={
+                "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            })
+
     def find_pr(self, token, name, branch, base):
         data = self.get(token, f"/repos/{name}/pulls", {
             "state": "all", "head": f"{name.split('/')[0]}:{branch}", "base": base, "per_page": 100,

@@ -20,13 +20,13 @@ from app.app import create_app
 from app.config import Settings
 from app.db import Base
 from .test_real_workflow import GitHubHTTP, login
-from .test_ai_analyses import AnalysisGitHub
+from .test_ai_branches import BranchGitHub
 
 
 def main():
     with TemporaryDirectory(prefix="anyship-browser-test-") as directory:
         fake_ai = "--ai" in sys.argv
-        fixture = AnalysisGitHub() if fake_ai else GitHubHTTP()
+        fixture = BranchGitHub() if fake_ai else GitHubHTTP()
         onboarding = "--onboarding" in sys.argv
         mock = "--mock" in sys.argv
         fixture.repo_selected = not onboarding

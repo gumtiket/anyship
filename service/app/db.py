@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, create_engine, event
+from sqlalchemy import BigInteger, Boolean, ForeignKey, String, Text, UniqueConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -162,6 +162,12 @@ class AIAnalysis(Base):
     request_id: Mapped[str] = mapped_column(String(36))
     status: Mapped[str] = mapped_column(String(24), default="queued")
     base_sha: Mapped[str] = mapped_column(String(40), default="")
+    base_branch: Mapped[str] = mapped_column(String(255), default="")
+    provider: Mapped[str] = mapped_column(String(16), default="fake")
+    work_branch: Mapped[str] = mapped_column(String(255), default="")
+    branch_created: Mapped[bool] = mapped_column(Boolean, default=False)
+    commit_sha: Mapped[str] = mapped_column(String(40), default="")
+    publish_token: Mapped[str] = mapped_column(String(36), default="")
     base_tree: Mapped[str] = mapped_column(String(40), default="")
     source_digest: Mapped[str] = mapped_column(String(64), default="")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
