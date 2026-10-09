@@ -190,3 +190,51 @@ def test_host_must_be_a_plain_lowercase_domain_name(host):
 
 def test_spec_errors_pass_through():
     assert rejected(make(app="Bad Name")).code == "invalid_spec"
+
+
+# --- 외부 DB(EC2 세트의 공유 RDS) -----------------------------------------------------------------
+DB_URL = ("postgresql://app_todo:a1b2c3d4e5f6a7b8c9d0e1f2@anyship-test-db.abc.ap-northeast-2.rds.amazonaws.com"
+          ":5432/app_todo?sslmode=require")
+
+
+def test_an_external_database_replaces_the_db_container_and_the_closed_network():
+    stack = render(database_url=DB_URL)
+    config = compose(stack)
+    assert "db" not in config["services"] and "volumes" not in config
+    # 앱이 VPC의 RDS에 닿아야 하므로 인터넷이 막힌 앱 전용 네트워크를 만들지 않는다.
+    assert config["services"]["web"]["networks"] == ["traefik"] and list(config["networks"]) == ["traefik"]
+    assert "depends_on" not in config["services"]["web"]
+    assert stack.compose_env == "" and stack.generated == ("SECRET_KEY",)  # DB 비밀번호는 만들지 않는다
+
+
+def test_the_external_database_address_is_written_only_to_the_secret_env_file():
+    stack = render(database_url=DB_URL)
+    assert f"DATABASE_URL='{DB_URL}'" in stack.app_env.splitlines()
+    assert "rds.amazonaws.com" not in stack.compose_yaml and "DATABASE_URL" not in stack.compose_yaml
+
+
+def test_without_an_external_database_the_db_container_is_still_created():
+    config = compose(render())  # 온프레미스의 기존 동작이 바뀌지 않았다는 보호 장치
+    assert "db" in config["services"] and "internal" in config["networks"]
+    assert config["services"]["web"]["networks"] == ["traefik", "internal"]
+
+
+@pytest.mark.parametrize("url", [
+    DB_URL.replace(":5432/", ":99999999/"),  # 포트가 숫자 4~5자리가 아님
+    DB_URL.replace("?sslmode=require", ""),  # SSL 필수가 빠짐
+    DB_URL.replace("?sslmode=require", "?sslmode=prefer"),
+    DB_URL.replace("postgresql://", "mysql://"),
+    DB_URL.replace("a1b2c3d4e5f6a7b8c9d0e1f2", "short"),
+    DB_URL.replace("app_todo:", "APP:"),  # 대문자 계정
+    DB_URL + "'; echo hacked",  # 환경 파일의 따옴표를 닫으려는 시도
+    DB_URL + "\nSECRET_KEY=x",  # 줄을 바꿔 다른 변수를 끼워 넣으려는 시도
+])
+def test_a_malformed_external_database_address_is_refused(url):
+    assert rejected(database_url=url).code == "invalid_env_value"
+
+
+def test_an_external_database_address_is_ignored_with_a_warning_when_the_spec_has_no_postgres():
+    stack = render(make(backing_services=[]), database_url=DB_URL)
+    assert "DATABASE_URL" not in stack.app_env and DB_URL not in stack.compose_yaml
+    assert any("postgres가 없어" in warning for warning in stack.warnings)
+    assert "internal" in compose(stack)["networks"]  # DB가 없으면 기존처럼 앱 전용 네트워크를 둔다
