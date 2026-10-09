@@ -35,10 +35,10 @@ def prepare_context(view: RepoView, diff: str, dockerfile: str) -> BuildContext:
                 "Dockerfile.source" if name == "Dockerfile" else name
             )
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(text.encode("utf-8"))
-        (Path(context.root) / "Dockerfile").write_bytes(dockerfile.encode("utf-8"))
+            destination.write_text(text, encoding="utf-8")
+        (Path(context.root) / "Dockerfile").write_text(dockerfile, encoding="utf-8")
         (Path(context.root) / ".dockerignore").write_text(
-            harden_dockerignore(proposed.get(".dockerignore", "")), encoding="utf-8", newline=""
+            harden_dockerignore(proposed.get(".dockerignore", "")), encoding="utf-8"
         )
         context._sample_name = identify_sample(view)
         context._sealed_digest = context.tree_digest()

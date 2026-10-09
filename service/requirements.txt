@@ -6,7 +6,6 @@
 
 # Direct dependencies: GitHub module and web service.
 -e ../infra/adapters
--e ../AI/ai
 requests==2.34.2
 fastapi==0.142.4
 uvicorn==0.54.0
@@ -17,16 +16,11 @@ cryptography==50.0.2
 psycopg[binary]==3.3.6
 python-dotenv==1.2.4
 boto3==1.43.109
-PyYAML==6.0.3
-pathspec==1.1.1
-packaging==26.3
-jsonschema==4.26.0
 
 # Transitive runtime dependencies.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
-attrs==26.1.0
 botocore==1.43.109
 certifi==2026.7.22
 cffi==2.1.1
@@ -36,7 +30,6 @@ h11==0.16.0
 httpcore==1.0.9
 idna==3.20
 jmespath==1.1.0
-jsonschema-specifications==2025.9.1
 Mako==1.4.3
 MarkupSafe==3.0.4
 opentelemetry-api==1.45.1
@@ -45,8 +38,6 @@ pycparser==3.0
 pydantic==2.13.5
 pydantic-core==2.46.5
 python-dateutil==2.9.0.post0
-referencing==0.37.0
-rpds-py==2026.9.1
 s3transfer==0.19.2
 six==1.17.0
 starlette==1.7.0
