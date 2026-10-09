@@ -176,3 +176,94 @@ def test_status_maps_http_errors_to_their_code_and_connection_problems_to_none(m
     assert compose_host._status(URL, True) == 502
     monkeypatch.setattr(compose_host.urllib.request, "urlopen", raise_conn)
     assert compose_host._status(URL, True) is None
+
+
+# --- 이미 배포된 앱을 살펴보고 바꾸고 지우는 도구 -----------------------------------------------
+def lifecycle():
+    from fakes import LifecycleServer
+    server = LifecycleServer()
+    ssh = SshRunner(SshConnection("3.38.88.141", Path("/key")), runner=server)
+    return ComposeHost(ssh, popen=server.popen), server
+
+
+def deployed(tag="aaaaaaa"):
+    host, server = lifecycle()
+    host.write_stack("todo", stack(image_tag=tag))
+    return host, server
+
+
+def test_exists_follows_the_compose_file_on_the_server():
+    host, server = lifecycle()
+    assert not host.exists("todo")
+    host.write_stack("todo", stack())
+    assert host.exists("todo")
+
+
+def test_the_current_tag_is_read_from_the_app_line_and_not_from_the_database_line():
+    host, server = deployed("aaaaaaa")
+    assert "postgres:16-alpine" in server.files["/opt/apps/todo/compose.yaml"].decode()
+    assert host.current_image_tag("todo") == "aaaaaaa"
+    assert lifecycle()[0].current_image_tag("todo") is None  # 배포된 적이 없다
+
+
+def test_set_image_tag_changes_only_the_app_image_line():
+    host, server = deployed("aaaaaaa")
+    before = {path: data for path, data in server.files.items()}
+    assert host.set_image_tag("todo", "bbbbbbb").ok
+    old = before["/opt/apps/todo/compose.yaml"].decode().splitlines()
+    new = server.files["/opt/apps/todo/compose.yaml"].decode().splitlines()
+    assert [(a, b) for a, b in zip(old, new) if a != b] == [('    image: "todo:aaaaaaa"', '    image: "todo:bbbbbbb"')]
+    assert len(old) == len(new)
+    for name in (".env", "app.env"):  # 비밀 파일은 건드리지 않는다
+        assert server.files[f"/opt/apps/todo/{name}"] == before[f"/opt/apps/todo/{name}"]
+    assert host.current_image_tag("todo") == "bbbbbbb"
+
+
+def test_set_image_tag_writes_nothing_when_the_app_line_is_missing_or_appears_twice():
+    host, server = deployed()
+    path = "/opt/apps/todo/compose.yaml"
+    text = server.files[path].decode()
+    for broken in (text.replace('image: "todo:aaaaaaa"', 'image: "other:aaaaaaa"'),
+                   text.replace("  db:", '    image: "todo:aaaaaaa"\n  db:')):
+        server.files[path] = broken.encode()
+        result = host.set_image_tag("todo", "bbbbbbb")
+        assert not result.ok and server.files[path] == broken.encode()
+
+
+@pytest.mark.parametrize("tag", ["latest", "AAAAAAA", "aaaaaa", "aaaaaaa; echo", ""])
+def test_set_image_tag_rejects_a_tag_that_is_not_a_commit_sha(tag):
+    host, server = deployed()
+    count = len(server.commands)
+    with pytest.raises(ValueError):
+        host.set_image_tag("todo", tag)
+    assert len(server.commands) == count
+
+
+def test_running_services_and_image_presence_come_from_the_server():
+    host, server = deployed()
+    assert host.running_services("todo") == set()
+    host.up("todo")
+    assert host.running_services("todo") == {"web", "db"}
+    server.images.add("todo:aaaaaaa")
+    assert host.image_present("todo:aaaaaaa") and not host.image_present("todo:bbbbbbb")
+    with pytest.raises(ValueError):
+        host.image_present("todo:latest")
+
+
+def test_down_removes_the_volumes_and_the_directory_removal_targets_exactly_the_app():
+    host, server = deployed()
+    host.down("todo")
+    assert server.commands[-1] == ["docker", "compose", "--project-directory", "/opt/apps/todo",
+                                   "down", "--volumes", "--remove-orphans"]
+    host.remove_dir("todo")
+    assert server.commands[-1] == ["rm", "-r", "-f", "/opt/apps/todo"]
+    assert not any(path.startswith("/opt/apps/todo/") for path in server.files)
+
+
+@pytest.mark.parametrize("app", ["..", "../etc", "a/b", "Todo", "", "a b", "todo/../x"])
+def test_destructive_tools_refuse_names_that_could_point_elsewhere(app):
+    host, server = lifecycle()
+    for call in (host.remove_dir, host.down, host.exists):
+        with pytest.raises(ValueError):
+            call(app)
+    assert server.commands == []

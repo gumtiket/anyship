@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from anyship_adapters import LogEvent, OnpremEnvironment
+from anyship_adapters import OnpremEnvironment
 from anyship_adapters.compose_host import ComposeHost
 from anyship_adapters.onprem import OnpremAdapter
 from anyship_adapters.ssh import SshConnection, SshRunner
 
-from fakes import FakePopen, FakeServer
+from fakes import FakePopen, FakeServer, Log
 from specs import GENERATED, HAND_WRITTEN, make
 
 ENV = OnpremEnvironment(env_id="demo", host="3.38.88.141")
@@ -30,20 +30,6 @@ def adapter(srv, healthy=lambda url, verify_tls: (True, 200), **kw):
     ssh = SshRunner(SshConnection("3.38.88.141", Path("/key")), runner=srv)
     host = ComposeHost(ssh, popen=lambda cmd, **k: FakePopen(cmd, **k))
     return OnpremAdapter(Path("/key"), connect=lambda env: (ssh, host), healthy=healthy, **kw)
-
-
-class Log:
-    def __init__(self):
-        self.events: list[LogEvent] = []
-
-    def __call__(self, event):
-        self.events.append(event)
-
-    def text(self):
-        return "".join(e.model_dump_json() for e in self.events)
-
-    def steps(self):
-        return [(e.step, e.total, e.name) for e in self.events if e.step]
 
 
 def deploy(srv, spec=GENERATED, secrets=None, log=None, **kw):

@@ -55,3 +55,78 @@ class FakePopen:
 
     def wait(self):
         return self.code
+
+
+class Log:
+    """진행 로그를 모아 두는 로그 함수."""
+
+    def __init__(self):
+        self.events = []
+
+    def __call__(self, event):
+        self.events.append(event)
+
+    def text(self):
+        return "".join(e.model_dump_json() for e in self.events)
+
+    def steps(self):
+        return [(e.step, e.total, e.name) for e in self.events if e.step]
+
+
+class LifecycleServer(FakeServer):
+    """파일뿐 아니라 이미지 보유, 실행 중인 서비스, 삭제까지 기억하는 가짜 서버.
+
+    배포 -> 상태 -> 롤백 -> 삭제의 흐름을 시험하려고 쓴다. responses로 지정한 명령은 항상 그 답이 우선한다.
+    """
+
+    def __init__(self, responses=None, **kwargs):
+        defaults = {("docker", "ps"): (0, b"traefik-traefik-1\n", b""), ("curl",): (0, b"3.38.88.141\n", b"")}
+        super().__init__(responses={**defaults, **(responses or {})}, **kwargs)
+        self.images: set[str] = set()
+        self.running: set[str] = set()
+        self.downed: list[str] = []
+        self.removed: list[str] = []
+        self._pending_image = None
+
+    def popen(self, cmd, **kwargs):
+        """ComposeHost의 popen으로 넘겨서, 어떤 이미지를 보냈는지 기억한다."""
+        self._pending_image = cmd[-1]
+        return FakePopen(cmd, **kwargs)
+
+    def _answer(self, cmd, code=0, out=b""):
+        return subprocess.CompletedProcess(cmd, code, stdout=out, stderr=b"")
+
+    def __call__(self, cmd, **kwargs):
+        remote = shlex.split(cmd[-1])
+        if any(tuple(remote[:len(prefix)]) == prefix for prefix in self.responses):
+            return super().__call__(cmd, **kwargs)
+        compose = remote[:2] == ["docker", "compose"]
+        handled = True
+        if remote[:3] == ["docker", "image", "inspect"]:
+            answer = self._answer(cmd, 0 if remote[-1] in self.images else 1)
+        elif remote == ["docker", "load"]:
+            self.images.add(self._pending_image)
+            answer = self._answer(cmd)
+        elif remote[:2] == ["test", "-f"]:
+            answer = self._answer(cmd, 0 if remote[2] in self.files else 1)
+        elif compose and "ps" in remote:
+            answer = self._answer(cmd, 0, ("\n".join(sorted(self.running)) + "\n").encode())
+        elif compose and "up" in remote:
+            self.running = {"web", "db"}
+            answer = self._answer(cmd)
+        elif compose and "down" in remote:
+            self.running = set()
+            self.downed.append(remote[remote.index("--project-directory") + 1])
+            answer = self._answer(cmd)
+        elif remote[:3] == ["rm", "-r", "-f"]:
+            target = remote[3]
+            self.files = {path: data for path, data in self.files.items() if not path.startswith(target + "/")}
+            self.removed.append(target)
+            answer = self._answer(cmd)
+        else:
+            handled = False
+        if not handled:
+            return super().__call__(cmd, **kwargs)
+        self.commands.append(remote)
+        self.kwargs.append(kwargs)
+        return answer
