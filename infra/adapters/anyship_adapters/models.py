@@ -49,10 +49,13 @@ class AwsEnvironment(AdapterModel):
         default=None, pattern=r"^anyship-tfstate-[0-9]{12}-[a-z]{2}(-[a-z]+)+-[0-9]-[0-9a-f]{8}$")
 
     @model_validator(mode="after")
-    def state_bucket_belongs_to_the_role_account(self):
-        # 다른 계정의 버킷에 state를 쓰게 되는 실수(또는 조작)를 막는다.
-        if self.state_bucket and self.state_bucket.split("-")[2] != self.role_arn.split(":")[4]:
+    def foundation_belongs_to_the_role_account(self):
+        # 다른 계정의 버킷에 state를 쓰거나 다른 계정의 비밀을 읽게 되는 실수(또는 조작)를 입구에서 막는다.
+        account = self.role_arn.split(":")[4]
+        if self.state_bucket and self.state_bucket.split("-")[2] != account:
             raise ValueError("state_bucket must belong to the same account as role_arn")
+        if self.db_secret_arn and self.db_secret_arn.split(":")[4] != account:
+            raise ValueError("db_secret_arn must belong to the same account as role_arn")
         return self
 
 

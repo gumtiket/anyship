@@ -159,6 +159,13 @@ def test_state_bucket_of_another_account_is_rejected():
         aws(state_bucket="anyship-tfstate-999999999999-ap-northeast-2-2b9b6060")
 
 
+def test_a_secret_of_another_account_is_rejected():
+    arn = "arn:aws:secretsmanager:ap-northeast-2:%s:secret:rds!db-abc-Xy1"
+    assert aws(db_secret_arn=arn % "123456789012").db_secret_arn
+    with pytest.raises(ValidationError, match="same account"):
+        aws(db_secret_arn=arn % "999999999999")
+
+
 def test_state_bucket_is_kept_when_the_environment_is_parsed_from_stored_data():
     row = {"kind": "aws", "env_id": "demo", "role_arn": ROLE_ARN, "external_id": EXTERNAL_ID, "state_bucket": BUCKET}
     assert TypeAdapter(Environment).validate_python(row).state_bucket == BUCKET

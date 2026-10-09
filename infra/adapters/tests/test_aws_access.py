@@ -148,7 +148,7 @@ def test_a_missing_or_foreign_secret_arn_is_rejected_before_any_aws_call(arn):
     calls = []
     access = AwsAccess(lambda **kwargs: calls.append(kwargs))
     with pytest.raises(AwsAccessError) as caught:
-        access.read_master_password(env(db_secret_arn=arn))
+        access.read_master_password(env().model_copy(update={"db_secret_arn": arn}))  # 모델 검증을 건너뛴 객체
     assert caught.value.error.code == "invalid_secret_arn" and calls == []
 
 
