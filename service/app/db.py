@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey, String, Text, UniqueConstraint, create_engine, event
+from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -98,6 +98,13 @@ class AwsEnvironment(Base):
     verified_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     verification_token: Mapped[str] = mapped_column(String(36), default="")
     lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
+    # 실제 배포용. 공용 기반이 만들어지면 채워진다. 모두 비밀이 아니다(DB 비밀번호는 Secrets Manager에만 있다).
+    env_id: Mapped[str | None] = mapped_column(String(21), unique=True, nullable=True)  # DNS와 Terraform 이름에 쓰는 고정 값
+    host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    db_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    db_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    db_secret_arn: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    state_bucket: Mapped[str | None] = mapped_column(String(63), nullable=True)  # Terraform state를 둔 사용자 계정의 S3 버킷
 
 
 class CodeChange(Base):
@@ -146,6 +153,37 @@ class MockJob(Base):
     scenario: Mapped[str] = mapped_column(String(24))
     image_tag: Mapped[str] = mapped_column(String(40), default="")
     status: Mapped[str] = mapped_column(String(16), default="queued")
+    logs_json: Mapped[str] = mapped_column(Text, default="[]")
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class Deployment(Base):
+    """프로젝트가 실제로 배포되는 대상(모의 배포 `MockDeployment`와 별개). 지금은 AWS 환경만 지원한다."""
+    __tablename__ = "deployments"
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)
+    aws_environment_id: Mapped[str] = mapped_column(ForeignKey("aws_environments.id"), index=True)
+    set_name: Mapped[str] = mapped_column(String(24))
+    app_name: Mapped[str] = mapped_column(String(63), default="")  # deploy-spec의 app. 첫 배포가 성공하면 채운다
+    image_tag: Mapped[str] = mapped_column(String(40), default="")  # 지금 실행 중인 버전
+    url: Mapped[str] = mapped_column(String(512), default="")
+    active_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[int] = mapped_column(BigInteger, default=0)  # 작업 선점의 만료(초). 20분짜리 작업을 덮는 TTL
+
+
+class DeployJob(Base):
+    __tablename__ = "deploy_jobs"
+    __table_args__ = (UniqueConstraint("project_id", "request_id", name="uq_deploy_job_request"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(36))
+    runtime_id: Mapped[str] = mapped_column(String(36))  # 어느 서버 실행에서 시작했는지(재시작 때 중단 처리)
+    action: Mapped[str] = mapped_column(String(16))
+    set_name: Mapped[str] = mapped_column(String(24))
+    image_tag: Mapped[str] = mapped_column(String(40), default="")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    stage: Mapped[str] = mapped_column(String(16), default="")  # 실패했을 때 어느 단계였는지(spec, build, foundation, check, deploy)
     logs_json: Mapped[str] = mapped_column(Text, default="[]")
     result_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[int] = mapped_column(BigInteger)
