@@ -13,7 +13,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import IO, Callable, Sequence
 
 _HOST = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 _USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
@@ -58,7 +58,7 @@ def _text(raw: bytes | str | None) -> str:
     return text[:MAX_OUTPUT]
 
 
-def _safe_env() -> dict[str, str]:
+def safe_env() -> dict[str, str]:
     # 서비스 서버의 AWS 자격 증명이나 토큰 같은 환경변수가 ssh 프로세스로 넘어가지 않게 한다.
     return {key: os.environ[key] for key in ("PATH", "HOME", "LANG") if key in os.environ}
 
@@ -94,14 +94,17 @@ class SshRunner:
         return ["ssh", *options, f"{conn.user}@{conn.host}", shlex.join(remote)]
 
     def run(self, args: Sequence[str], *, timeout: float = 60,
-            input: str | bytes | None = None) -> CommandResult:
-        """원격에서 명령을 실행한다. 실패는 예외가 아니라 결과의 returncode로 알린다."""
-        if not args or any("\0" in arg for arg in args):
+            input: str | bytes | None = None, stdin: IO[bytes] | None = None) -> CommandResult:
+        """원격에서 명령을 실행한다. 실패는 예외가 아니라 결과의 returncode로 알린다.
+
+        input은 작은 내용을 통째로, stdin은 큰 내용(이미지 등)을 스트림으로 흘려보낼 때 쓴다."""
+        if not args or any("\0" in arg for arg in args) or (input is not None and stdin is not None):
             raise ValueError("invalid remote command")
         data = input.encode() if isinstance(input, str) else input
+        feed = {"stdin": stdin} if stdin is not None else {"input": data}
         try:
-            done = self._runner(self._command(args), input=data, capture_output=True,
-                                timeout=timeout, env=_safe_env(), check=False)
+            done = self._runner(self._command(args), capture_output=True,
+                                timeout=timeout, env=safe_env(), check=False, **feed)
         except subprocess.TimeoutExpired as exc:
             return CommandResult(124, _text(exc.stdout), _text(exc.stderr), timed_out=True)
         return CommandResult(done.returncode, _text(done.stdout), _text(done.stderr))
