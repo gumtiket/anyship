@@ -408,7 +408,7 @@ def test_a_deploy_request_id_cannot_be_reused_for_a_destroy(sessions):
 def test_an_unknown_action_is_a_programming_error(sessions):
     target(sessions)
     with sessions() as session, pytest.raises(ValueError):
-        claim(session, "p1", uuid.uuid4(), "runtime", action="rollback")
+        claim(session, "p1", uuid.uuid4(), "runtime", action="arbitrary_command")
 
 
 def finish_destroyed(sessions, job_id):

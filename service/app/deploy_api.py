@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 
-from .db import AwsEnvironment, DeployJob, Deployment, Project
+from .db import AwsEnvironment, DeployJob, Deployment, Project, OnpremEnvironment
 from .deploy_state import DeployStateError
 from .deployments import REAL_SETS, DeploymentError, job_json, select_target
 from .source import SourceError
@@ -35,7 +35,8 @@ class TargetInput(BaseModel):
 class JobInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: uuid.UUID
-    action: Literal["deploy", "destroy"] = "deploy"
+    action: Literal["deploy", "destroy", "status", "rollback"] = "deploy"
+    image_tag: str = Field(default="", max_length=40)
     secrets: dict[str, str] = Field(default_factory=dict, max_length=MAX_SECRETS)
 
     @field_validator("secrets")
@@ -48,8 +49,13 @@ class JobInput(BaseModel):
 
     @model_validator(mode="after")
     def destroy_takes_no_secrets(self):
-        if self.action == "destroy" and self.secrets:
+        if self.action != "deploy" and self.secrets:
             raise ValueError("a destroy takes no secrets")  # 값은 오류에 싣지 않는다
+        if self.action == "rollback":
+            if not re.fullmatch(r"[0-9a-f]{7,40}", self.image_tag):
+                raise ValueError("invalid rollback image tag")
+        elif self.image_tag:
+            raise ValueError("only rollback accepts an image tag")
         return self
 
 
@@ -72,30 +78,43 @@ def router(settings, runner, db, current, mutation, access_token=None):
     def target_json(session, target):
         if target is None:
             return None
-        environment = session.get(AwsEnvironment, target.aws_environment_id)
-        return {"environment_id": target.aws_environment_id, "environment_name": environment.name,
+        environment = (session.get(OnpremEnvironment, target.onprem_environment_id) if target.onprem_environment_id
+                       else session.get(AwsEnvironment, target.aws_environment_id))
+        return {"environment_id": environment.id, "environment_name": environment.name,
                 "set_name": target.set_name, "app_name": target.app_name, "image_tag": target.image_tag,
-                "url": target.url, "deployed": bool(target.image_tag), "active_job_id": target.active_job_id,
+                "url": target.url, "deployed": bool(target.image_tag or (target.onprem_environment_id and target.app_name)), "active_job_id": target.active_job_id,
                 "busy": bool(target.active_job_id) and target.lease_until > int(time.time())}
 
     @routes.get("")
     def get(project_id: str, login=Depends(current), session=Depends(db)):
         project(session, login, project_id)
         rows = session.scalars(owned_environments(session, login).order_by(AwsEnvironment.created_at.desc()))
-        return {"target": target_json(session, session.get(Deployment, project_id)), "sets": list(REAL_SETS),
-                "environments": [{"id": row.id, "name": row.name, "region": row.region,
-                                  "available": row.status == "CONNECTED" and bool(row.role_arn)} for row in rows]}
+        environments = [{"id": row.id, "name": row.name, "region": row.region, "set_name": "aws-always-on",
+                         "available": row.status == "CONNECTED" and bool(row.role_arn)} for row in rows]
+        onprem = getattr(runner, "onprem", None)
+        if onprem:
+            environments += [{"id": row.id, "name": row.name, "region": "온프레미스", "set_name": "onprem",
+                "available": row.status == "VERIFIED"} for row in session.scalars(select(OnpremEnvironment).where(
+                    OnpremEnvironment.workspace_id == login.workspace_id, OnpremEnvironment.created_by == login.user_id,
+                    OnpremEnvironment.deleted_at.is_(None)))]
+        return {"target": target_json(session, session.get(Deployment, project_id)),
+                "sets": list(REAL_SETS) if onprem else ["aws-always-on"], "environments": environments}
 
     @routes.put("")
     def save(project_id: str, body: TargetInput, login=Depends(mutation), session=Depends(db)):
         project(session, login, project_id)
-        environment = session.scalar(owned_environments(session, login).where(AwsEnvironment.id == str(body.environment_id)))
+        if body.set_name == "onprem" and getattr(runner, "onprem", None):
+            environment = session.scalar(select(OnpremEnvironment).where(OnpremEnvironment.id == str(body.environment_id),
+                OnpremEnvironment.workspace_id == login.workspace_id, OnpremEnvironment.created_by == login.user_id,
+                OnpremEnvironment.deleted_at.is_(None)))
+        else:
+            environment = session.scalar(owned_environments(session, login).where(AwsEnvironment.id == str(body.environment_id)))
         if environment is None:
             fail(404, "environment_not_found", "환경을 찾을 수 없습니다.")
         try:
             return target_json(session, select_target(session, project_id, environment, body.set_name))
-        except DeploymentError as error:
-            fail(error.status, error.code, error.message)
+        except (DeploymentError, DeployStateError) as error:
+            fail(getattr(error, "status", 409), error.code, error.message)
 
     @routes.get("/jobs")
     def jobs(project_id: str, limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
@@ -116,7 +135,12 @@ def router(settings, runner, db, current, mutation, access_token=None):
     def submit(project_id: str, body: JobInput, response: Response, login=Depends(mutation), session=Depends(db)):
         row = project(session, login, project_id)
         try:
-            if body.action == "destroy":
+            if body.action in ("status", "rollback"):
+                target = session.get(Deployment, row.id)
+                if not target or not target.onprem_environment_id or not getattr(runner, "onprem", None):
+                    fail(422, "action_not_supported", "이 환경에서는 지원하지 않는 작업입니다.")
+                created_job, created = runner.onprem.submit_project(session, row, body.request_id, body.action, image_tag=body.image_tag)
+            elif body.action == "destroy":
                 created_job, created = runner.submit_destroy(session, row, body.request_id)
             else:
                 # 사용자의 GitHub 토큰은 요청 안에서 소스를 받을 때만 쓰이고, 응답, 로그, DB에는 남지 않는다.

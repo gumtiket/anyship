@@ -94,11 +94,13 @@ class LogSink:
 
 class DeployRunner:
     def __init__(self, settings, sessions, *, source: SourceProvider, deployer, access=None, executor=None,
-                 lock_dir: Path | None = None):
+                 lock_dir: Path | None = None, onprem_deployer=None, transport=None):
         self.settings, self.sessions, self.source, self.deployer = settings, sessions, source, deployer
         self.access, self._executor_override = access, executor
         self.lock_dir = lock_dir or Path(__file__).resolve().parents[1] / "workspaces" / "deploy"
         self.runtime_id, self.executor, self.lock_file = str(uuid.uuid4()), None, None
+        from .onprem_runner import OnpremRunner
+        self.onprem = OnpremRunner(self, onprem_deployer, transport) if onprem_deployer is not None else None
 
     @classmethod
     def from_settings(cls, settings, sessions):
@@ -120,7 +122,14 @@ class DeployRunner:
                             dns=dns)
         source = (LocalFolderSource(settings.deploy_source_dir) if settings.deploy_source == "local"
                   else GitHubCloneSource(settings.deploy_workspace))
-        return cls(settings, sessions, source=source, deployer=deployer)
+        from anyship_adapters.onprem import OnpremAdapter
+        from .onprem_transport import Transport
+        transport = Transport(settings)
+        onprem_dns = WildcardRecords(scope="onprem", base_domain=settings.deploy_base_domain) if settings.deploy_dns else None
+        onprem_adapter = OnpremAdapter(settings.deploy_ssh_key, connect=transport.connect,
+            base_domain=settings.deploy_base_domain, verify_tls=settings.deploy_verify_tls, dns=onprem_dns)
+        return cls(settings, sessions, source=source, deployer=deployer,
+                   onprem_deployer=Deployer({"onprem": onprem_adapter}, ImageBuilder(timeout=900)), transport=transport)
 
     def start(self) -> None:
         self.lock_file = _lock(self.lock_dir, self.settings.database_url)
@@ -154,6 +163,8 @@ class DeployRunner:
         if previous := find_request(session, project.id, request_id, "deploy"):
             return previous, False  # 같은 요청의 재전송은 소스를 다시 받지 않는다
         target = session.get(Deployment, project.id)
+        if target and target.onprem_environment_id:
+            return self.onprem.submit_project(session, project, request_id, "deploy", secrets, token)
         environment = session.get(AwsEnvironment, target.aws_environment_id) if target else None
         if environment is not None:
             adapter_environment(environment)  # 연결이 확인되지 않은 환경은 여기서 거절한다
@@ -180,6 +191,8 @@ class DeployRunner:
         """요청 안에서: 배포된 앱을 지우는 작업을 선점해 스레드에 넘긴다. (작업, 새로 만들었는지).
         지우는 것은 앱의 컨테이너, 볼륨, 서버의 앱 폴더뿐이다. 앱 DB와 공용 기반(호스트, RDS), DNS 레코드는 남는다."""
         target = session.get(Deployment, project.id)
+        if target and target.onprem_environment_id:
+            return self.onprem.submit_project(session, project, request_id, "destroy")
         environment = session.get(AwsEnvironment, target.aws_environment_id) if target else None
         if environment is not None:
             adapter_environment(environment)  # 연결이 확인되지 않은 환경은 여기서 거절한다

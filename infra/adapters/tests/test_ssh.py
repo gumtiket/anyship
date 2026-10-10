@@ -44,7 +44,7 @@ def test_command_targets_the_deploy_account_with_key_only_options():
     cmd = fake.command
     assert cmd[0] == "ssh" and "deploy@3.38.88.141" in cmd
     options = " ".join(cmd)
-    for expected in ("-i /home/ec2-user/.ssh/onprem_deploy", "BatchMode=yes",
+    for expected in (f"-i {KEY}", "BatchMode=yes",
                      "PasswordAuthentication=no", "IdentitiesOnly=yes", "-p 22"):
         assert expected in options
 
@@ -65,7 +65,7 @@ def test_every_argument_reaches_the_remote_shell_as_one_token(args):
 def test_known_hosts_file_is_used_when_given():
     fake = FakeRunner()
     SshRunner(SshConnection("h.example.com", KEY), runner=fake, known_hosts=Path("/var/known")).run(["true"])
-    assert "UserKnownHostsFile=/var/known" in " ".join(fake.command)
+    assert f"UserKnownHostsFile={Path('/var/known')}" in " ".join(fake.command)
 
 
 def test_only_a_minimal_environment_is_passed_to_ssh(monkeypatch):

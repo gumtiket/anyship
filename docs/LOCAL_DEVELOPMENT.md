@@ -142,6 +142,8 @@ cd service
 
 ## 검증과 현재 한계
 
+온프레미스 등록·배포의 설정, API, 가짜 서버 브라우저 검증 도우미와 미검증 항목은 [온프레미스 서비스 연결](ONPREM_SERVICE.md)을 참고합니다. 최신 마이그레이션 `0010`은 기존 AWS 데이터를 보존합니다.
+
 ```powershell
 # 저장소 루트에서 실행. 실제 서비스 DB와 분리된 PostgreSQL DB를 사용합니다.
 .\service\.venv\Scripts\python.exe scripts/local_postgres.py test

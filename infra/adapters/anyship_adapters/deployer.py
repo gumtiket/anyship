@@ -25,7 +25,7 @@ from .dns import DnsError, WildcardRecords
 from .foundation import FoundationSettings, ensure_foundation
 from .image_builder import BuildError, ImageBuilder
 from .models import (IMAGE_TAG_PATTERN, AdapterError, CheckResult, DeployResult, DestroyResult, Environment, LogEvent, Secrets,
-                     Spec)
+                     Spec, StatusResult)
 from .rds_admin import db_name
 from .redact import make_safe_log, redact_json, redact_model
 from .sets import AWS_ALWAYS_ON, AWS_SERVERLESS, ONPREM, SetName
@@ -178,6 +178,27 @@ class Deployer:
         if not result.ok:
             safe(LogEvent(level="error", step=1, total=1, name="연결 확인", message=result.error.message))
         return result
+
+    def status(self, env: Environment, app: str, log: LogFn, *, set_name: SetName) -> StatusResult:
+        adapter, refused, channels = self._entry(env, set_name, "상태 확인", log)
+        if adapter is None:
+            return StatusResult(ok=False, error=refused)
+        try:
+            channels[1](LogEvent(message="앱 상태를 확인합니다."))
+            return redact_model(adapter.status(env, app))
+        except Exception:
+            return StatusResult(ok=False, error=AdapterError(code="status_pipeline_error",
+                message="상태를 확인하지 못했습니다.", retryable=True))
+
+    def rollback(self, env: Environment, app: str, image_tag: str, log: LogFn, *, set_name: SetName) -> DeployResult:
+        adapter, refused, channels = self._entry(env, set_name, "롤백", log)
+        if adapter is None:
+            return DeployResult(ok=False, error=refused)
+        try:
+            return redact_model(adapter.rollback(env, app, image_tag, channels[1]))
+        except Exception:
+            return DeployResult(ok=False, error=AdapterError(code="rollback_pipeline_error",
+                message="롤백을 완료하지 못했습니다.", retryable=True))
 
     def destroy(self, env: Environment, app: str, log: LogFn, *, set_name: SetName) -> DestroyResult:
         """배포한 앱을 지운다(컨테이너, 볼륨, 앱 디렉터리). 앱 DB와 공용 기반, DNS 레코드는 남긴다.

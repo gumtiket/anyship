@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from .config import Settings
 from .db import CodeChange, DemoChange, LoginSession, Membership, OAuthAttempt, Project, RepositoryConnection, User, Workspace, database
 from .github_api import DemoGitHub, GitHubAPI, GitHubFailure
-from . import analyses, analysis_api, aws_onboarding, code_changes, deploy_api, demo_changes, deployments, mock_deployments, onboarding
+from . import analyses, analysis_api, aws_onboarding, code_changes, deploy_api, demo_changes, deployments, mock_deployments, onboarding, onprem_api
 from .aws_adapter import AwsAdapter
 
 auth_logger = logging.getLogger("anyship.auth")
@@ -90,6 +90,8 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request, error):
+        if request.url.path.startswith("/api/onprem/"):
+            return JSONResponse({"detail": "환경 등록 요청의 입력값을 확인해 주세요."}, status_code=422)
         if "/mock-deployment" in request.url.path:
             # Reject unsupported secret inputs without echoing their values.
             return JSONResponse({"detail": "모의 작업의 입력값을 확인해 주세요. 지원하는 환경·작업과 7~40자리 16진수 버전을 사용하세요."}, status_code=422)
@@ -149,6 +151,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
     app.include_router(aws_onboarding.router(settings, aws_adapter, db, current, mutation))
     app.include_router(mock_deployments.router(settings, mock_runner, db, current, mutation))
     app.include_router(deploy_api.router(settings, deploy_runner, db, current, mutation, access_token))
+    app.include_router(onprem_api.router(settings, deploy_runner, db, current, mutation))
 
     def installations(login):
         return github.installations(access_token(login))
@@ -193,6 +196,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
     @app.get("/api/config")
     def config():
         return {"demo": settings.demo, "github_configured": settings.github_configured,
+                "onprem_available": getattr(deploy_runner, "onprem", None) is not None,
                 "aws_available": settings.aws_configured,
                 "aws_verification_available": settings.aws_configured and aws_adapter is not None,
                 "aws_regions": list(settings.aws_regions),
