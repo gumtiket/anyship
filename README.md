@@ -42,7 +42,7 @@ AnyShip은 GitHub 저장소 URL을 입력하면, AI가 12-factor 원칙을 기�
 4. 변경안(diff)을 검토하고 선택해 GitHub Draft PR로 제출합니다.
 5. 머지한 커밋을 이미지로 빌드해 환경에 배포하고, 진행 로그를 화면에서 확인합니다.
 
-![./docs/images/AnyShip_Serviceflow.png](C:\Users\psc\Documents\Softbank\team-bronze\docs\images\AnyShip_Serviceflow.png)
+![docs/images/AnyShip_Serviceflow.png](C:\Users\psc\Documents\Softbank\team-bronze\docs\images\AnyShip_Serviceflow.png)
 
 ---
 
