@@ -384,6 +384,72 @@ EXTERNAL_ID=... python -u infra/adapters/scripts/smoke_deployer.py --role-arn <�
 `smoke_deployer.py`는 잘못된 입력의 조기 거절, 한 번의 호출로 5단계 로그와 기반 값이 결과에 실리는지, 공개 주소에서 읽기와 쓰기, `destroy`를 확인합니다(서버에서 13/13).
 **아직 서버에서 확인하지 않은 것**: 기반이 없을 때 처음부터 만드는 경로(실제 `apply` 약 20분과 실시간 로그, `created=True`).
 
+## 온프레미스를 서비스에 붙일 때 (연동 계약)
+
+어댑터 쪽은 준비되어 있습니다. 서비스는 아래 호출만 부르면 됩니다(서비스 코드는 이 문서의 범위가 아닙니다). 서버를 사용자가 준비하는 방법은 [`infra/onprem-vm/README.md`](../onprem-vm/README.md)입니다.
+
+### 서비스가 저장할 환경 값
+
+`OnpremEnvironment`(비밀이 아니다): `env_id`(소문자 시작, 2~21자, 도메인과 DNS 이름에 쓰이는 **바뀌지 않는 값**), `host`(IP 또는 호스트 이름), `ssh_user`(기본 `deploy`), `ssh_port`(기본 22). SSH **개인 키는 환경 레코드가 아니라 서비스 설정**이다(`OnpremAdapter(key_path, ...)`). 지금은 모든 환경이 키 하나를 공유한다.
+
+### 호출 순서
+
+| 시점 | 호출 | 결과 |
+|---|---|---|
+| 등록 화면 | `render_setup_script(공개 키 한 줄, 사용자의 이메일)` | 사용자가 서버에서 `sudo bash`로 실행할 한 파일(Docker, `deploy` 계정, SSH 설정, Traefik). 공개 키와 이메일만 들어 있고 값은 형식을 검사한다(`SetupScriptError`) |
+| 연결 확인 | `deployer.check(env, log, set_name="onprem")` | SSH, Docker, Traefik, 공개 IP를 확인. 성공하면 `details["public_ip"]`. 실패하면 오류 코드와 힌트 |
+| 배포 | `deployer.deploy(env, spec, source_dir, commit_sha, secrets, log, set_name="onprem")` | 이미지 빌드 → 연결 확인 → 배포. **`runner`와 `foundation` 없이** 만든 `Deployer`를 쓰면 4단계이고, 공용 기반 단계는 없다. DNS는 어댑터가 첫 배포에서 맞춘다(아래) |
+| 앱 삭제 | `deployer.destroy(env, app, log, set_name="onprem")` | 앱 컨테이너, 볼륨, 서버의 앱 폴더. 앱 DB와 DNS는 남는다 |
+| 환경 삭제 | `deployer.remove_environment(env, log, set_name="onprem")` | 환경의 DNS 레코드를 지운다(서버에는 접속하지 않음). **이 환경에 남은 앱이 없을 때만** 부른다(어댑터는 앱을 세지 않는다) |
+
+`Deployer`를 만드는 모양:
+
+```python
+dns = WildcardRecords(scope="onprem", base_domain="anyship.cloud")   # 서비스 서버 역할의 Route 53(IAM 적용 완료)
+adapter = OnpremAdapter(Path("/home/ec2-user/.ssh/onprem_deploy"), base_domain="anyship.cloud", dns=dns)
+deployer = Deployer({"onprem": adapter}, ImageBuilder())             # runner, foundation 없음 → 기반 단계 없음
+```
+
+AWS 세트와 함께 쓰려면 `{"aws-always-on": aws_adapter, "onprem": adapter}`로 한 `Deployer`에 같이 넣고 `set_name`으로 고른다. 환경 종류와 세트가 맞지 않으면 어댑터를 부르기 전에 `set_not_supported`로 거절된다.
+
+### DNS가 만들어지는 때
+
+레코드는 앱마다가 아니라 **환경(서버)마다 하나**(`*.<환경ID>.onprem.<도메인>` → 서버의 공인 IP)다. `OnpremAdapter`에 `dns`를 주면 **배포 때마다** 서버의 공인 IP로 맞추므로(멱등) IP가 바뀌어도 스스로 고쳐진다. 등록 시점에 미리 만들 필요는 없다. 레코드를 지우는 것은 `remove_environment`뿐이다.
+
+### 오류 코드
+
+| 코드 | 언제 | 재시도 |
+|---|---|---|
+| `ssh_unreachable` | 서버에 SSH로 닿지 못함(주소, 포트, 방화벽, 준비 스크립트) | 예 |
+| `ssh_command_failed` | 접속은 되지만 명령이 실패 | 아니요 |
+| `docker_missing` | Docker 또는 Compose가 없음 | 아니요 |
+| `proxy_not_ready` | Traefik이 실행 중이지 않음 | 아니요 |
+| `public_ip_unknown` | 서버의 공인 IPv4를 알 수 없음 | 예 |
+| `dns_change_failed`, `dns_zone_not_found`, `invalid_dns_input` | DNS를 맞추지 못함(권한, 영역, 비공인 IP) | 코드에 따라 |
+| `set_not_supported` | 환경 종류와 맞지 않는 세트 | 아니요 |
+| `check_pipeline_error`, `destroy_pipeline_error`, `remove_environment_pipeline_error` | 예기치 않은 예외(원문은 싣지 않고 `details["exception"]`에 종류만) | 예 |
+| `remove_environment_unsupported` | 환경 단위 정리가 없는 세트(AWS)에 `remove_environment`를 부름 | 아니요 |
+
+배포 중 오류(`image_transfer_failed`, `server_write_failed`, `container_start_failed`, `migration_failed`, `healthcheck_failed` 등)는 `deploy` 결과의 `error`로 나오고, 실패한 큰 단계는 `details["stage"]`다.
+
+### 서비스 쪽에서 바뀌어야 할 것 (참고, 이 저장소의 서비스 코드는 아직 건드리지 않았다)
+
+- 환경 레코드: 온프레미스 서버 정보를 저장할 곳(지금 서비스에는 AWS 환경 테이블뿐).
+- 배포 대상(`deployments`)이 AWS 환경에만 묶여 있다. 환경 종류별로 가리킬 수 있어야 하고, 배포 가능 세트(`REAL_SETS`)에 `onprem`이 들어가야 한다.
+- 실행기가 `OnpremAdapter`와 `WildcardRecords(scope="onprem")`를 조립해야 한다.
+- 화면: 서버 정보 입력, 준비 스크립트와 안내, 연결 확인 결과.
+
+### 시험
+
+```bash
+python -m pytest infra/adapters   # 온프레미스 어댑터, DNS, 준비 스크립트, Deployer 진입점 포함
+
+# 서비스 서버에서, 실제 온프레미스 시험 서버로(Route 53은 건드리지 않음)
+python scripts/smoke_onprem.py --host <서버 IP> --env-id demo --staging
+# DNS까지(새 환경 ID로만: 레코드를 만들고 지운다)
+python scripts/smoke_onprem.py --host <서버 IP> --env-id dnstest --dns --staging
+```
+
 ## 오류 코드 (현재)
 
 mock이 내는 코드이고, 실제 어댑터가 생기면 더 늘어납니다

@@ -24,7 +24,8 @@ from .compose import render_stack
 from .dns import DnsError, WildcardRecords
 from .foundation import FoundationSettings, ensure_foundation
 from .image_builder import BuildError, ImageBuilder
-from .models import IMAGE_TAG_PATTERN, AdapterError, DeployResult, DestroyResult, Environment, LogEvent, Secrets, Spec
+from .models import (IMAGE_TAG_PATTERN, AdapterError, CheckResult, DeployResult, DestroyResult, Environment, LogEvent, Secrets,
+                     Spec)
 from .rds_admin import db_name
 from .redact import make_safe_log, redact_json, redact_model
 from .sets import AWS_ALWAYS_ON, AWS_SERVERLESS, ONPREM, SetName
@@ -146,20 +147,46 @@ class Deployer:
         log(LogEvent(message="DNS 레코드를 새 주소로 맞췄습니다." if changed else "DNS 레코드가 이미 맞게 설정되어 있습니다."))
         return {"record": name, "changed": changed}
 
-    def destroy(self, env: Environment, app: str, log: LogFn, *, set_name: SetName) -> DestroyResult:
-        """배포한 앱을 지운다(컨테이너, 볼륨, 앱 디렉터리). 앱 DB와 공용 기반, DNS 레코드는 남긴다.
-
-        세트와 환경 종류가 맞는지 먼저 보고, 어댑터의 결과를 그대로 돌려주되 예기치 않은 예외는 종류만 남긴다(원문에 비밀이 섞일 수 있다)."""
+    def _entry(self, env: Environment, set_name: SetName, stage: str, log: LogFn):
+        """배포 말고 진입점(연결 확인, 삭제, 환경 정리)이 함께 쓰는 준비: 세트와 환경 종류가 맞는지 보고, 로그를 큰 단계 하나로 정리한다.
+        맞지 않으면 (None, 오류, None)을 돌려준다."""
         adapter = self._adapters.get(set_name)
         if adapter is None or SET_KINDS.get(set_name) != env.kind:
-            return DestroyResult(ok=False, error=AdapterError(
-                code="set_not_supported", message=f"이 환경에서는 '{set_name}' 세트를 사용할 수 없습니다."))
+            return None, AdapterError(code="set_not_supported", message=f"이 환경에서는 '{set_name}' 세트를 사용할 수 없습니다."), None
         safe = make_safe_log(log)
 
         def forward(event: LogEvent) -> None:
             prefix = f"[{event.step}/{event.total}] " if event.step and event.total else ""
-            safe(LogEvent(level=event.level, step=1, total=1, name="앱 삭제", message=(prefix + event.message)[:2000]))
+            safe(LogEvent(level=event.level, step=1, total=1, name=stage, message=(prefix + event.message)[:2000]))
 
+        return adapter, None, (safe, forward)
+
+    def check(self, env: Environment, log: LogFn, *, set_name: SetName) -> CheckResult:
+        """서버에 닿고 쓸 수 있는지 확인한다(온프레미스는 환경을 등록할 때). 성공하면 `details`에 어댑터가 알려 주는 값(공개 IP 등)이 담긴다.
+
+        배포 안의 "연결 확인"과 같은 어댑터 함수를 쓴다. AWS 세트는 공용 기반이 있어야 통과하므로 등록 확인에는 쓰지 않는다."""
+        adapter, refused, channels = self._entry(env, set_name, "연결 확인", log)
+        if adapter is None:
+            return CheckResult(ok=False, error=refused)
+        safe, forward = channels
+        try:
+            result = adapter.check(env, forward)
+        except Exception as exc:  # 원문에는 비밀이 섞일 수 있어 종류만 남긴다
+            result = CheckResult(ok=False, error=AdapterError(
+                code="check_pipeline_error", message="연결 확인 중 예기치 않은 오류가 발생했습니다.",
+                hint="서비스 서버의 로그를 확인해 주세요.", retryable=True), details={"exception": type(exc).__name__})
+        if not result.ok:
+            safe(LogEvent(level="error", step=1, total=1, name="연결 확인", message=result.error.message))
+        return result
+
+    def destroy(self, env: Environment, app: str, log: LogFn, *, set_name: SetName) -> DestroyResult:
+        """배포한 앱을 지운다(컨테이너, 볼륨, 앱 디렉터리). 앱 DB와 공용 기반, DNS 레코드는 남긴다.
+
+        세트와 환경 종류가 맞는지 먼저 보고, 어댑터의 결과를 그대로 돌려주되 예기치 않은 예외는 종류만 남긴다(원문에 비밀이 섞일 수 있다)."""
+        adapter, refused, channels = self._entry(env, set_name, "앱 삭제", log)
+        if adapter is None:
+            return DestroyResult(ok=False, error=refused)
+        safe, forward = channels
         try:
             result = adapter.destroy(env, app, forward)
         except Exception as exc:
@@ -168,4 +195,28 @@ class Deployer:
                 hint="서비스 서버의 로그를 확인해 주세요.", retryable=True), details={"exception": type(exc).__name__})
         if not result.ok:
             safe(LogEvent(level="error", step=1, total=1, name="앱 삭제", message=result.error.message))
+        return result
+
+    def remove_environment(self, env: Environment, log: LogFn, *, set_name: SetName) -> DestroyResult:
+        """환경을 서비스에서 지울 때 환경 단위로 만든 것을 정리한다(온프레미스: 환경의 DNS 레코드). 서버에는 접속하지 않는다.
+
+        레코드는 환경의 모든 앱이 함께 쓰므로 **이 환경에 남은 앱이 없을 때만** 불러야 한다(어댑터는 남은 앱을 세지 않는다).
+        환경 단위 정리가 없는 세트(AWS)는 오류(`remove_environment_unsupported`)를 돌려준다."""
+        adapter, refused, channels = self._entry(env, set_name, "환경 정리", log)
+        if adapter is None:
+            return DestroyResult(ok=False, error=refused)
+        safe, forward = channels
+        remover = getattr(adapter, "remove_environment_dns", None)
+        if remover is None:
+            return DestroyResult(ok=False, error=AdapterError(
+                code="remove_environment_unsupported", message="이 세트는 환경 단위 정리를 지원하지 않습니다.",
+                hint="환경 단위 자원(공용 기반 등)은 별도로 정리해 주세요."))
+        try:
+            result = remover(env, forward)
+        except Exception as exc:
+            result = DestroyResult(ok=False, error=AdapterError(
+                code="remove_environment_pipeline_error", message="환경 정리 중 예기치 않은 오류가 발생했습니다.",
+                hint="서비스 서버의 로그를 확인해 주세요.", retryable=True), details={"exception": type(exc).__name__})
+        if not result.ok:
+            safe(LogEvent(level="error", step=1, total=1, name="환경 정리", message=result.error.message))
         return result
