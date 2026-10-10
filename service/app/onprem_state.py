@@ -43,5 +43,9 @@ def extend(session, job_id):
 
 
 def in_use(session, environment_id):
-    return session.scalar(select(Deployment.project_id).where(Deployment.onprem_environment_id == environment_id,
-        or_(Deployment.app_name != "", Deployment.image_tag != "", Deployment.active_job_id.is_not(None)))) is not None
+    """이 환경에 앱이 있거나 작업이 진행 중이면 True. 환경 이전 뒤 멈춘 채 남은 이전 앱도 포함한다."""
+    current = select(Deployment.project_id).where(Deployment.onprem_environment_id == environment_id,
+        or_(Deployment.app_name != "", Deployment.image_tag != "", Deployment.active_job_id.is_not(None)))
+    left_behind = select(Deployment.project_id).where(Deployment.previous_kind == "onprem",
+        Deployment.previous_environment_id == environment_id, Deployment.previous_app_name != "")
+    return session.scalar(current) is not None or session.scalar(left_behind) is not None

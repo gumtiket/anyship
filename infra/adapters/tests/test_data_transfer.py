@@ -9,7 +9,8 @@ import pytest
 from anyship_adapters import AwsEnvironment, OnpremEnvironment
 from anyship_adapters.aws_always_on import AwsAlwaysOnAdapter
 from anyship_adapters.compose_host import ComposeHost
-from anyship_adapters.data_transfer import (COUNT_SQL, SIZE_SQL, ComposeDbEndpoint, RdsDbEndpoint, transfer_database)
+from anyship_adapters.data_transfer import (COUNT_SQL, SIZE_SQL, ComposeDbEndpoint, RdsDbEndpoint, inspect_source,
+                                            transfer_database)
 from anyship_adapters import deployer as deployer_module
 from anyship_adapters.deployer import Deployer
 from anyship_adapters.models import AdapterError, TransferResult
@@ -321,3 +322,61 @@ def test_deployer_masks_secrets_again_on_whatever_the_transfer_returns(monkeypat
     monkeypatch.setattr(deployer_module, "transfer_database", lambda *args, **kwargs: leaky)
     result = deployer(DbServer(), DbServer()).transfer_data(ONPREM, AWS, APP, Log(), source_set="onprem", target_set="aws-always-on")
     assert not result.ok and PASSWORD not in result.model_dump_json()
+
+
+# --- 원본 미리 확인 --------------------------------------------------------------------------------
+def test_inspecting_the_source_reports_the_size_and_changes_nothing():
+    server = DbServer(size=4096)
+    result = inspect_source(compose_endpoint(server), Log())
+    assert result.ok and result.details == {"bytes": 4096}
+    assert server.stops() == [] and server.ups() == [] and server.restored is None
+    assert not any("pg_dump" in " ".join(c) for c in server.commands)  # 덤프도 뜨지 않는다
+
+
+def test_inspecting_refuses_a_database_over_the_limit():
+    result = inspect_source(compose_endpoint(DbServer(size=9000)), Log(), max_bytes=1000)
+    assert not result.ok and result.error.code == "db_too_large" and result.details["bytes"] == 9000
+
+
+def test_inspecting_reports_an_unreachable_server_a_missing_app_and_an_unusable_database():
+    assert inspect_source(compose_endpoint(DbServer(unreachable=True)), Log()).error.code == "ssh_unreachable"
+    assert inspect_source(compose_endpoint(DbServer(exists=False)), Log()).error.code == "app_not_found"
+
+    class Broken(DbServer):
+        def __call__(self, cmd, **kwargs):
+            if "psql" in " ".join(shlex.split(cmd[-1])):
+                return self._done(cmd, 2, b"", b"FATAL: the database system is starting up")
+            return super().__call__(cmd, **kwargs)
+
+    broken = inspect_source(compose_endpoint(Broken()), Log())
+    assert not broken.ok and broken.error.code == "source_db_unavailable" and broken.error.retryable
+
+
+def test_deployer_inspects_the_source_through_its_adapter():
+    source = DbServer(size=777)
+    log = Log()
+    result = deployer(source, DbServer()).check_transfer_source(ONPREM, APP, log, set_name="onprem")
+    assert result.ok and result.details == {"bytes": 777}
+    assert {name for _, _, name in log.steps()} == {"원본 확인"}
+
+
+def test_deployer_inspect_refuses_wrong_sets_bad_names_and_a_missing_foundation():
+    d = deployer(DbServer(), DbServer())
+    assert d.check_transfer_source(ONPREM, APP, Log(), set_name="aws-always-on").error.code == "set_not_supported"
+    assert d.check_transfer_source(ONPREM, "Bad_App", Log(), set_name="onprem").error.code == "invalid_spec"
+    no_host = AwsEnvironment(env_id="prod", role_arn="arn:aws:iam::123456789012:role/anyship", external_id="x" * 20)
+    assert d.check_transfer_source(no_host, APP, Log(), set_name="aws-always-on").error.code == "foundation_missing"
+
+
+def test_if_the_target_cannot_start_after_the_copy_the_source_serves_again():
+    class WontStart(DbServer):
+        def __call__(self, cmd, **kwargs):
+            remote = shlex.split(cmd[-1])
+            if remote[:2] == ["docker", "compose"] and "up" in remote:
+                return self._done(cmd, 1, b"", b"port is already allocated")
+            return super().__call__(cmd, **kwargs)
+
+    result, source, target, _ = move(target=WontStart())
+    assert not result.ok and result.error.code == "target_start_failed" and result.error.retryable
+    assert source.web and len(source.ups()) == 1  # 원본을 다시 켰다
+    assert result.details["stderr"] == "port is already allocated"

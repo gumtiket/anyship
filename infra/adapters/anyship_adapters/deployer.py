@@ -21,7 +21,7 @@ from typing import Any, Mapping
 
 from .base import Adapter, LogFn
 from .compose import render_stack
-from .data_transfer import DEFAULT_MAX_BYTES, TransferInputError, transfer_database
+from .data_transfer import DEFAULT_MAX_BYTES, TransferInputError, inspect_source, transfer_database
 from .dns import DnsError, WildcardRecords
 from .foundation import FoundationSettings, ensure_foundation
 from .image_builder import BuildError, ImageBuilder
@@ -201,6 +201,25 @@ class Deployer:
         except Exception:
             return DeployResult(ok=False, error=AdapterError(code="rollback_pipeline_error",
                 message="롤백을 완료하지 못했습니다.", retryable=True))
+
+    def check_transfer_source(self, env: Environment, app: str, log: LogFn, *, set_name: SetName,
+                              max_bytes: int = DEFAULT_MAX_BYTES) -> TransferResult:
+        """데이터를 옮기기 전에 원본만 미리 확인한다(아무것도 멈추거나 바꾸지 않는다). 성공하면 `details["bytes"]`가 DB 크기다."""
+        adapter, refused, channels = self._entry(env, set_name, "원본 확인", log)
+        if adapter is None:
+            return TransferResult(ok=False, error=refused)
+        if not _APP.match(app):
+            return TransferResult(ok=False, error=AdapterError(code="invalid_spec", message="앱 이름 형식이 올바르지 않습니다."))
+        if not hasattr(adapter, "data_endpoint"):
+            return TransferResult(ok=False, error=AdapterError(
+                code="transfer_not_supported", message="이 환경은 데이터 이전을 지원하지 않습니다."))
+        try:
+            return redact_model(inspect_source(adapter.data_endpoint(env, app), channels[1], max_bytes=max_bytes))
+        except TransferInputError as exc:
+            return TransferResult(ok=False, error=redact_model(exc.error))
+        except Exception:
+            return TransferResult(ok=False, error=AdapterError(
+                code="transfer_pipeline_error", message="원본을 확인하지 못했습니다.", retryable=True))
 
     def transfer_data(self, source_env: Environment, target_env: Environment, app: str, log: LogFn, *,
                       source_set: SetName, target_set: SetName, max_bytes: int = DEFAULT_MAX_BYTES) -> TransferResult:

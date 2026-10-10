@@ -230,18 +230,48 @@ class _Transfer:
                              tables=differing)
 
         self.step(5, "마무리", "대상 앱을 시작하는 중(원본 앱은 멈춘 채로 둡니다)")
-        was_stopped = source in self.stopped
-        if was_stopped:
-            self.stopped.remove(source)  # 원본은 일부러 되돌리지 않는다
         started = target.host.up(target.app)  # 멈췄던 대상 앱을 시작한다(켜져 있었다면 그대로 둔다)
         if target in self.stopped:
             self.stopped.remove(target)
         if not started.ok:
+            # 데이터는 옮겨졌지만 대상이 서지 못한다. 양쪽이 모두 멈춘 채 두지 않고 원본이 다시 서게 한다(그동안 쓰기는 없었다).
+            self.resume(source)
             return self.fail(_err("target_start_failed", "대상 앱을 시작하지 못했습니다.",
-                                  hint="데이터는 옮겨졌습니다. 대상 환경에서 앱을 다시 시작해 주세요.", retryable=True),
-                             stderr=_tail(started.stderr))
+                                  hint="원본 앱을 다시 시작했습니다. 대상 환경에서 앱이 시작되지 않는 원인을 확인해 주세요.",
+                                  retryable=True), stderr=_tail(started.stderr))
+        was_stopped = source in self.stopped
+        if was_stopped:
+            self.stopped.remove(source)  # 성공하면 원본은 일부러 되돌리지 않는다
         return TransferResult(ok=True, details={"bytes": size, "tables": len(after), "rows": sum(after.values()),
                                                 "source_stopped": was_stopped})
+
+
+def inspect_source(source: DbEndpoint, log: LogFn, *, max_bytes: int = DEFAULT_MAX_BYTES) -> TransferResult:
+    """옮기기 전에 원본만 미리 확인한다(접속, 앱이 있는지, DB 크기가 한도 안인지). 아무것도 멈추거나 바꾸지 않는다.
+
+    대상 환경을 새로 배포하기 전에 부르면, 옮길 수 없는 DB 때문에 오래 걸리는 배포를 헛되이 하는 일을 막는다.
+    성공하면 `details["bytes"]`에 DB 크기가 담긴다."""
+    log(LogEvent(step=1, total=1, name="원본 확인", message="원본 서버, 앱, DB 크기를 확인하는 중"))
+
+    def refuse(error: AdapterError, **details) -> TransferResult:
+        log(LogEvent(level="error", message=error.message))
+        return TransferResult(ok=False, error=error, details=details)
+
+    reached = source.ssh.run(["true"])
+    if not reached.ok:
+        error = _ssh_error(reached)
+        return refuse(_err(error.code, f"원본 환경: {error.message}", error.hint, error.retryable))
+    if not source.host.exists(source.app):
+        return refuse(_err("app_not_found", "원본 환경에 이 앱이 배포되어 있지 않습니다."))
+    sized = source.query(SIZE_SQL)
+    if not sized.ok or not sized.stdout.strip().isdigit():
+        return refuse(_err("source_db_unavailable", "원본 DB에 접속하지 못했습니다.",
+                           hint="원본 앱의 DB가 실행 중인지 확인해 주세요.", retryable=True), stderr=_tail(sized.stderr))
+    size = int(sized.stdout.strip())
+    if size > max_bytes:
+        return refuse(_err("db_too_large", f"DB가 너무 커서 옮길 수 없습니다({size}바이트, 한도 {max_bytes}바이트).",
+                           hint="이 방식은 서비스 서버를 거치는 작은 DB용입니다."), bytes=size)
+    return TransferResult(ok=True, details={"bytes": size})
 
 
 def transfer_database(source: DbEndpoint, target: DbEndpoint, log: LogFn, *, max_bytes: int = DEFAULT_MAX_BYTES,

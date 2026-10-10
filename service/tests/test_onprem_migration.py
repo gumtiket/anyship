@@ -47,6 +47,7 @@ def test_migration_preserves_aws_targets_and_supports_nullable_transport(databas
         session.commit()
     with pytest.raises(RuntimeError, match="Remove on-premise"):
         command.downgrade(config, "0009")
+    command.upgrade(config, "head")  # 되돌리기는 0011을 먼저 되돌린 채 0010에서 거절되므로, 다음 확인을 위해 다시 올린다
     with sessions() as session:
         target = session.get(Deployment, "p1")
         target.aws_environment_id, target.onprem_environment_id, target.set_name = "old", None, "aws-always-on"

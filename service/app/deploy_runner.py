@@ -94,13 +94,15 @@ class LogSink:
 
 class DeployRunner:
     def __init__(self, settings, sessions, *, source: SourceProvider, deployer, access=None, executor=None,
-                 lock_dir: Path | None = None, onprem_deployer=None, transport=None):
+                 lock_dir: Path | None = None, onprem_deployer=None, transport=None, transfer_deployer=None):
         self.settings, self.sessions, self.source, self.deployer = settings, sessions, source, deployer
         self.access, self._executor_override = access, executor
         self.lock_dir = lock_dir or Path(__file__).resolve().parents[1] / "workspaces" / "deploy"
         self.runtime_id, self.executor, self.lock_file = str(uuid.uuid4()), None, None
         from .onprem_runner import OnpremRunner
         self.onprem = OnpremRunner(self, onprem_deployer, transport) if onprem_deployer is not None else None
+        from .migration_runner import MigrationRunner  # AWS와 온프레미스 어댑터를 모두 가진 배포기가 있을 때만 환경 이전을 한다
+        self.migration = MigrationRunner(self, transfer_deployer) if transfer_deployer is not None else None
 
     @classmethod
     def from_settings(cls, settings, sessions):
@@ -128,8 +130,11 @@ class DeployRunner:
         onprem_dns = WildcardRecords(scope="onprem", base_domain=settings.deploy_base_domain) if settings.deploy_dns else None
         onprem_adapter = OnpremAdapter(settings.deploy_ssh_key, connect=transport.connect,
             base_domain=settings.deploy_base_domain, verify_tls=settings.deploy_verify_tls, dns=onprem_dns)
+        # 환경 이전과 이전 앱 삭제는 두 종류의 환경을 한 번에 다루므로 어댑터를 모두 가진 배포기를 따로 둔다(빌드와 기반 생성은 하지 않는다).
+        transfer_deployer = Deployer({"aws-always-on": adapter, "onprem": onprem_adapter}, ImageBuilder(timeout=900))
         return cls(settings, sessions, source=source, deployer=deployer,
-                   onprem_deployer=Deployer({"onprem": onprem_adapter}, ImageBuilder(timeout=900)), transport=transport)
+                   onprem_deployer=Deployer({"onprem": onprem_adapter}, ImageBuilder(timeout=900)), transport=transport,
+                   transfer_deployer=transfer_deployer)
 
     def start(self) -> None:
         self.lock_file = _lock(self.lock_dir, self.settings.database_url)
