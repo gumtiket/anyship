@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, FlaskConical, LoaderCircle, Play, RefreshCw, RotateCcw } from 'lucide-react';
 import { api, mutation } from './api';
 import { DeleteRegistration } from './DeleteRegistration';
+import { DeploymentLogs } from './DeploymentLogs';
 import './mock-deployment.css';
 
 type Target = {
@@ -165,9 +166,7 @@ export function MockDeployment({ projectId, csrf, mode, onError }: {
           </button>)}</div>
           {job && <div className="mock-job-detail" aria-live="polite"><strong>{actions[job.action]} · {states[job.status]}</strong><p>{job.target_label} · {sets[job.set_name]}</p>
             {job.result.error && <div className="error" role="alert"><div>{job.result.error.message}{job.result.error.hint && <small>{job.result.error.hint}</small>}</div></div>}
-            <ol className="mock-logs">{job.logs.map((entry, index) => <li key={index} className={entry.level === 'error' ? 'is-error' : ''}>
-              <span>{entry.step}/{entry.total}</span><div><strong>{entry.name}</strong><p>{entry.message}</p></div>
-            </li>)}</ol>
+            <DeploymentLogs key={job.id} logs={job.logs}/>
             {job.status === 'queued' && <p>작업 순서를 기다리고 있습니다.</p>}
           </div>}
         </>}
