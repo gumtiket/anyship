@@ -74,7 +74,7 @@ def test_llm_cannot_delete_rule_findings_change_factors_or_signals():
                 "factor": 3,
                 "file": "app/main.py",
                 "line": 1,
-                "evidence": "검토 후보",
+                "evidence": repo.read("app/main.py").splitlines()[0],
                 "description": "추가 확인",
             },
         ],
@@ -85,9 +85,9 @@ def test_llm_cannot_delete_rule_findings_change_factors_or_signals():
     assert result.violations[0].description == "설명"
     assert {v.id for v in original.violations} <= {v.id for v in result.violations}
     assert result.signals == original.signals
-    assert result.violations[-1].source == "llm"
-    assert result.violations[-1].confidence == "needs_review"
-    assert not result.violations[-1].auto_fixable
+    assert {v.id for v in original.violations} == {v.id for v in result.violations}
+    assert result.review_candidates[-1].source == "llm"
+    assert result.review_candidates[-1].confidence == "needs_review"
     assert "dummy-secret-do-not-use" not in fake.calls[0].user
     assert "VIOLATIONS.json" not in fake.calls[0].user
 

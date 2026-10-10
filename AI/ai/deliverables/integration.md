@@ -1,5 +1,61 @@
 # A가 현재 AI 파트에 연결하는 방법 (P6)
 
+## 시연 엔진 출력 변경 — 2026-10-10
+
+`diagnosis.violations`는 규칙으로 찾은 위반만 담는다. LLM 후보는 다음 새 필드로 분리한다.
+파일 7종, 함수 시그니처와 Stage enum은 유지한다.
+
+```json
+{
+  "review_candidates": [{
+    "id": "llm_candidate:app/main.py:1:2",
+    "factor": 2,
+    "file": "app/main.py",
+    "line": 1,
+    "evidence": "import json",
+    "description": "검토가 필요한 후보",
+    "source": "llm",
+    "confidence": "needs_review"
+  }]
+}
+```
+
+위 객체는 `diagnosis` 안에 있으며 기본은 빈 배열이다. factor는 II/III/IV/VI/VII/XI만
+허용한다. evidence가 해당 실제 소스 줄의 마스킹된 내용과 일치하는 발췌일 때만 줄 번호를
+공개한다. 잘못된 위치/근거 후보는 버리고 diagnosis.warnings에 고정 코드를 남긴다.
+위치 일치는 내용의 정확한 위반 판정을 뜻하지 않으며 후보는 계속 needs_review다.
+
+A는 규칙 위반 수와 AI 검토 후보 수를 따로 표시하고 후보를 숨기지 않는다. 후보는 수정
+선택지/규칙 확정/PR 승인 대상으로 취급하지 않는다. addressed_ids/deferred_ids와
+transformation.status 및 추천 세트는 후보 유무와 무관하다. 후보 0개를 LLM 검토 성공으로
+해석하지 말고 기존 enrichment_status와 execution_source를 함께 표시한다.
+trace의 `llm-comparison.json.llm_candidates`에는 검증한 후보를 계속 기록한다.
+로그/reason의 내부 마일스톤 번호는 제거했으나 Stage 값은 바꾸지 않았다.
+
+### CLI 전용 데모 캐시
+
+현재 웹(A) 흐름에는 이 캐시가 연결되어 있지 않다. 웹 호출 실패를 자동으로 복구하는
+기능이 아니라 CLI로 전환하는 대비책이다. 캐시는 소스/엔진/파일 해시 및
+settings_key(target_env, commit, source_repo, app_name, profile, image_reference,
+tfvars_overrides, cost_assumptions, compare_original, max_request_seconds)가 모두 같아야 쓴다.
+기본 명령은 다음이며 별도의 commit/source-repo/app-name 옵션을 추가하면 캐시가 맞지 않을 수 있다.
+
+```sh
+python -m ai analyze samples/todo --env onprem --use-demo-cache --llm none
+python -m ai analyze samples/todo-scheduler --env aws --use-demo-cache --llm none
+```
+
+캐시가 안 맞으면 정상 규칙 분석으로 돌아간다. 위 고정 명령은 llm none이므로 이 경우에도
+새 모델 호출은 없으며, 캐시 hit는 execution_source=demo_cache로 직접 확인해야 한다.
+사전 결과의 gate.status=skipped/historical_status=passed/pr_eligible=false를 유지한다.
+C smoke 스크립트는 명세 파일을 직접 읽으므로 CLI의 settings_key 검사나 추천 세트를
+자동 적용하지 않는다. 갱신 후 C가 사용할 --out 경로를 따로 확인해야 한다.
+
+녹화 v2는 제공자별 경로와 manifest의 제공자/origin/요청 모델/파라미터를 고정하고,
+stage·응답 모델·파라미터·응답 및 요청 해시가 맞지 않으면 PlaybackError로 거부한다.
+기존 Bedrock v1 응답은 변경하지 않고 별도 고정 metadata로 계속 검증한다.
+Fake 녹화는 오프라인 테스트 전용이며 실제 제공자로 replay/캐시 검증할 수 없다.
+
 현재 B는 로컬 레포 경로를 받아 진단 JSON, 코드 변경안 diff, Dockerfile과 배포 명세를 생성한다. GitHub URL 클론과 PR 생성은 A에서 연결한다. B의 HTTP 서버는 없다.
 
 프로젝트 루트에서 Python 3.12로 설치한다.

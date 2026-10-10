@@ -84,7 +84,7 @@ def run_gate(
 
     def step(name: str, action: Callable[[], str]) -> str:
         started = time.monotonic()
-        log(Stage.BUILDING if "build" in name else Stage.VALIDATING, f"P4: {name}")
+        log(Stage.BUILDING if "build" in name else Stage.VALIDATING, name)
         try:
             text = action()
         except (RunnerError, ValueError, OSError) as error:
@@ -322,7 +322,7 @@ def run_gate(
             report.reason = "gate_cleanup_failed"
     log(
         Stage.FAILED if report.status == "failed" else Stage.VALIDATING,
-        f"P4 결과: {report.status}; 현재 PR 승인 가능 표시는 false입니다.",
+        f"게이트 결과: {report.status}; 현재 PR 승인 가능 표시는 false입니다.",
     )
     return report
 

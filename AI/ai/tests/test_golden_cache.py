@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -33,7 +34,7 @@ def test_record_and_replay_preserve_schema_retry_sequence_without_external_usage
     backend = FakeLLMClient(["{}", '{"message":"ok"}'])
     record = RecordingClient(backend, SAMPLE, tmp_path / "llm")
     first = record.complete("system", "user", tier="fast", schema=Message, stage="diagnose")
-    replay = ReplayClient(SAMPLE, tmp_path / "llm")
+    replay = ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
     second = replay.complete("system", "user", tier="fast", schema=Message, stage="diagnose")
     replay.assert_consumed()
     assert first.parsed == second.parsed
@@ -42,7 +43,7 @@ def test_record_and_replay_preserve_schema_retry_sequence_without_external_usage
     assert replay.tracker.report().total.input_tokens == 0
     assert replay.tracker.report().total.cost_usd == 0
     assert second.transport_attempts == 0
-    fixture = json.loads((tmp_path / "llm/todo/diagnose.json").read_text())
+    fixture = json.loads((tmp_path / "llm/fake/todo/diagnose.json").read_text())
     assert len(fixture["entries"]) == 2
     assert fixture["entries"][0]["prompt_hash"] != fixture["entries"][1]["prompt_hash"]
     assert "request_system" not in fixture and "request_user" not in fixture
@@ -53,7 +54,7 @@ def test_prompt_or_schema_changes_are_fatal_not_normal_llm_fallback(tmp_path):
     RecordingClient(backend, SAMPLE, tmp_path / "llm").complete(
         "system", "user", tier="fast", schema=Message, stage="diagnose"
     )
-    replay = ReplayClient(SAMPLE, tmp_path / "llm")
+    replay = ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
     with pytest.raises(PlaybackError, match="prompt_hash_mismatch"):
         replay.complete("changed system", "user", tier="fast", schema=Message, stage="diagnose")
     with pytest.raises(PlaybackError, match="prompt_hash_mismatch"):
@@ -64,15 +65,15 @@ def test_fixture_response_tampering_and_unused_records_are_rejected(tmp_path):
     RecordingClient(FakeLLMClient(['{"message":"ok"}']), SAMPLE, tmp_path / "llm").complete(
         "system", "user", tier="fast", schema=Message, stage="diagnose"
     )
-    replay = ReplayClient(SAMPLE, tmp_path / "llm")
+    replay = ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
     with pytest.raises(PlaybackError, match="unused"):
         replay.assert_consumed()
-    path = tmp_path / "llm/todo/diagnose.json"
+    path = tmp_path / "llm/fake/todo/diagnose.json"
     fixture = json.loads(path.read_text())
     fixture["entries"][0]["response"]["text"] = '{"message":"edited"}'
     path.write_text(json.dumps(fixture))
     with pytest.raises(PlaybackError, match="response_hash_mismatch"):
-        ReplayClient(SAMPLE, tmp_path / "llm")
+        ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
 
 
 def test_credentials_redacted_before_record_parse_and_storage(tmp_path):
@@ -81,7 +82,7 @@ def test_credentials_redacted_before_record_parse_and_storage(tmp_path):
         FakeLLMClient([json.dumps({"message": credential_url})]), SAMPLE, tmp_path / "llm"
     )
     result = record.complete("system", "user", tier="fast", schema=Message, stage="diagnose")
-    text = (tmp_path / "llm/todo/diagnose.json").read_text()
+    text = (tmp_path / "llm/fake/todo/diagnose.json").read_text()
     assert "test-password" not in text and "test-user" not in text
     assert "[REDACTED]" in result.parsed.message
     assert_public(text)
@@ -164,6 +165,8 @@ def test_committed_recordings_contain_no_credentials():
         fixture = json.loads(path.read_text())
         assert fixture["origin"] == "BedrockClient"
         assert_public(path.read_text())
+        if path.name == "manifest.json":
+            continue
         for entry in fixture["entries"]:
             assert_public(entry["response"]["text"])
 
@@ -211,9 +214,9 @@ def test_recorded_demo_cache_hit_with_matching_engine_is_historical(tmp_path, mo
     assert result.cost.historical and result.cost.external_calls == 0
     assert all("(사전 실행 결과)" in message for _, message in logs)
     assert all((tmp_path / "out" / name).exists() for name in OUTPUT_NAMES)
-    assert [(s.value, m.removeprefix("(사전 실행 결과) ")) for s, m in logs[1:]] == [
-        (e["stage"], e["message"]) for e in manifest["events"]
-    ]
+    assert [stage.value for stage, _ in logs[1:]] == [e["stage"] for e in manifest["events"]]
+    assert not any(re.search(r"\bP\d+(?::| 결과:)", message) for _, message in logs)
+    assert "규칙 진단·변경안·패키징·추천 시작" in logs[1][1]
 
 
 @pytest.mark.parametrize("change", ["code", "env", "commit", "engine", "corrupt", "missing"])
@@ -262,7 +265,7 @@ def test_cache_never_overwrites_input_and_fake_result_cannot_be_published_as_liv
         SAMPLE, out_dir=tmp_path / "out", runner=FakeRunner(), log=lambda *_: None
     )
     try:
-        with pytest.raises(ValueError, match="actual_bedrock_and_docker"):
+        with pytest.raises(ValueError, match="actual_provider_and_docker"):
             save_cache(SAMPLE, result, [], root=tmp_path / "cache")
     finally:
         result.build_context.cleanup()

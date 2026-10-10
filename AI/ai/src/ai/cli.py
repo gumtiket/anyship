@@ -98,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         "--llm-provider",
         choices=("bedrock", "anthropic"),
         default="bedrock",
-        help="record 모드의 실제 호출 제공자 (기본 bedrock)",
+        help="record/replay의 기대 제공자 (기본 bedrock)",
     )
     analyze.add_argument("--source-repo", default=None)
     analyze.add_argument("--app-name", default=None, help="A가 확정한 앱 이름 (3~31자 DNS 라벨)")
@@ -149,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             backend = AnthropicClient() if args.llm_provider == "anthropic" else BedrockClient()
             llm = RecordingClient(backend, args.repo_path, Path(args.llm_fixtures))
         elif args.llm == "replay":
-            llm = ReplayClient(args.repo_path, Path(args.llm_fixtures))
+            llm = ReplayClient(args.repo_path, Path(args.llm_fixtures), provider=args.llm_provider)
         if args.llm in {"record", "replay"} and args.artifact_llm != "none":
             raise ValueError(
                 "record/replay의 패키징은 고정 템플릿입니다. artifact-llm은 none으로 두세요."
