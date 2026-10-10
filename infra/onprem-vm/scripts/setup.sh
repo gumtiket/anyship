@@ -9,6 +9,11 @@
 # only the service server's PUBLIC key is needed.
 set -euo pipefail
 
+# 부른 쪽의 umask에 기대지 않는다. 한 줄 명령이 비공개 임시 파일을 만들려고 umask 077을 걸어 두면 sudo를 거쳐 이 스크립트까지 이어지고,
+# 그러면 /usr/local/lib/docker 같은 폴더가 root 전용(700)으로 만들어져 deploy 계정이 Compose 플러그인을 찾지 못한다.
+# 비밀 파일(authorized_keys, .env)은 아래에서 모드를 따로 지정하므로 영향이 없다.
+umask 022
+
 COMPOSE_VERSION="v2.29.7"
 DEPLOY_USER="deploy"
 

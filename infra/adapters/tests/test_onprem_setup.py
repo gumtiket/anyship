@@ -79,3 +79,11 @@ def test_a_setup_script_without_a_shebang_is_still_embedded_whole(tmp_path):
     plain.write_text("echo first\necho second\n", encoding="utf-8")
     script = render_setup_script(KEY, EMAIL, setup_script=plain)
     assert "echo first\necho second" in script and script.startswith("#!/bin/bash\n")
+
+
+def test_the_script_fixes_its_own_umask_before_it_creates_anything():
+    # 한 줄 명령이 umask 077을 걸고 sudo로 이 스크립트를 부르면, 폴더가 root 전용(700)이 되어 deploy 계정이
+    # Compose 플러그인을 찾지 못한다(실서버에서 재현). 그래서 만들기 전에 umask를 고정해야 한다.
+    script = render_setup_script(KEY, EMAIL)
+    first_creation = min(script.index(text) for text in ("mkdir -p", "install -d", "install -m"))
+    assert script.index("\numask 022\n") < first_creation
