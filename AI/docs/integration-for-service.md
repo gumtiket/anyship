@@ -2,6 +2,9 @@
 
 B는 CLI와 `run_analysis` 함수만 제공한다. 입력은 권한 확인 후 A가 준비한 로컬 레포 경로다. GitHub 토큰·클라우드 자격 증명·서비스 DB 연결을 B에 전달하지 않는다. B의 HTTP 서버는 없다. 팀의 AIProvider Protocol에 연결하는 A 측 코드는 아직 별도 작업이다.
 
+병합 후 B 전달 예제와 미합의 계약은 [서비스 연결 다음 단계](service-connection-next.md)를 참고한다.
+`ai/scripts/service_handoff.py`는 진단·안전/출처 정보의 전달 제안이며 현재 웹의 analyze/modify를 대체하지 않는다.
+
 ## CLI 연결
 
 `ai/`와 `samples/`가 있는 디렉터리에서 실행한다. 팀 저장소에서는 `AI/`다. `subprocess`의 인자 리스트로 호출하고 shell 명령 문자열에 사용자 입력을 넣지 않는다. stdout은 진행 로그, out은 구조화된 결과다.
