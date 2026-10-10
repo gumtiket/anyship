@@ -19,6 +19,7 @@ from .deploy_state import assign_env_id
 
 LEASE_SECONDS = 30 * 60
 ACTIVE = ("queued", "running")
+ACTIONS = ("deploy", "destroy")
 REAL_SETS = ("aws-always-on",)  # 실제로 배포할 수 있는 세트(aws-serverless는 아직 없다)
 MAX_EVENTS, KEEP_FIRST, MAX_MESSAGE = 400, 100, 500
 OMITTED = "(중간 로그 일부 생략)"
@@ -63,15 +64,35 @@ def select_target(session, project_id: str, environment: AwsEnvironment, set_nam
     return target
 
 
-def claim(session, project_id: str, request_id, runtime_id: str, *, image_tag: str = "", now: int | None = None):
-    """배포 작업을 만들고 선점한다. (작업, 새로 만들었는지). 같은 요청 ID가 다시 오면 기존 작업을 돌려준다."""
+def find_request(session, project_id: str, request_id, action: str):
+    """이미 같은 요청 ID로 만든 작업이 있으면 돌려준다(없으면 None). 다른 동작에 재사용한 요청 ID는 거절한다.
+    소스를 받는 것 같은 비싼 일을 하기 전에 중복 요청을 거르려고 따로 둔다."""
+    previous = session.scalar(select(DeployJob).where(DeployJob.project_id == project_id,
+                                                      DeployJob.request_id == str(request_id)))
+    if previous is not None and previous.action != action:
+        raise _error("request_conflict", "같은 요청 식별자에 다른 작업을 보낼 수 없습니다.")
+    return previous
+
+
+def claim(session, project_id: str, request_id, runtime_id: str, *, action: str = "deploy", image_tag: str = "",
+          now: int | None = None):
+    """배포 또는 삭제 작업을 만들고 선점한다. (작업, 새로 만들었는지). 같은 요청 ID가 다시 오면 기존 작업을 돌려준다.
+
+    삭제(`destroy`)는 배포된 적이 있을 때만 할 수 있다. 작업 기록의 image_tag에는 지우는 버전이 남는다."""
+    if action not in ACTIONS:
+        raise ValueError("action must be one of " + ", ".join(ACTIONS))
+    created_ms = int(time.time() * 1000) if now is None else now * 1000  # 같은 초에 만든 작업도 순서가 갈리도록 밀리초로 기록한다
     now = int(time.time()) if now is None else now
     existing = select(DeployJob).where(DeployJob.project_id == project_id, DeployJob.request_id == str(request_id))
-    if previous := session.scalar(existing):
+    if previous := find_request(session, project_id, request_id, action):
         return previous, False
     target = session.get(Deployment, project_id)
     if target is None:
         raise _error("target_required", "배포할 환경을 먼저 선택해 주세요.")
+    if action == "destroy":
+        if not target.image_tag:
+            raise _error("not_deployed", "배포된 앱이 없어 지울 것이 없습니다.")
+        image_tag = target.image_tag
     if target.active_job_id and target.lease_until <= now:  # 만료된 선점: 죽은 작업을 중단으로 정리한다
         session.execute(update(DeployJob).where(DeployJob.id == target.active_job_id, DeployJob.status.in_(ACTIVE)).values(
             status="interrupted", finished_at=now * 1000,
@@ -84,7 +105,7 @@ def claim(session, project_id: str, request_id, runtime_id: str, *, image_tag: s
         session.rollback()
         raise _error("deploy_job_running", "이미 배포 작업을 처리하고 있습니다.")
     job = DeployJob(id=identifier, project_id=project_id, request_id=str(request_id), runtime_id=runtime_id,
-                    action="deploy", set_name=target.set_name, image_tag=image_tag, created_at=now * 1000)
+                    action=action, set_name=target.set_name, image_tag=image_tag, created_at=created_ms)
     session.add(job)
     try:
         session.commit()
@@ -104,7 +125,9 @@ def extend_lease(session, job_id: str, *, now: int | None = None) -> None:
 
 def finish(session, job_id: str, *, ok: bool, result: dict, stage: str = "", deployed: dict | None = None,
            now: int | None = None) -> bool:
-    """작업을 끝내고 선점을 풀며, 성공이면 배포 상태(`deployed`: image_tag, url, app_name)를 반영한다. 이미 끝났거나 중단된 작업이면 False."""
+    """작업을 끝내고 선점을 풀며, 성공이면 배포 상태(`deployed`: image_tag, url, app_name)를 반영한다. 이미 끝났거나 중단된 작업이면 False.
+
+    배포를 지운 작업은 `deployed`에 빈 문자열 세 개를 넘겨 "아직 배포하지 않음"으로 되돌린다."""
     now = int(time.time()) if now is None else now
     done = session.execute(update(DeployJob).where(DeployJob.id == job_id, DeployJob.status.in_(ACTIVE)).values(
         status="succeeded" if ok else "failed", stage=stage, finished_at=now * 1000,

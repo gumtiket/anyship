@@ -4,7 +4,8 @@
 
     python scripts/check_dns_policy.py
 
-허용되어야 할 요청(환경 와일드카드 A 레코드)은 통과하고, 그 밖의 이름과 종류는 AccessDenied여야 한다.
+허용되어야 할 요청(환경 와일드카드 A 레코드: `*.<환경ID>.onprem.<도메인>`과 `*.<환경ID>.aws.<도메인>`)은 통과하고,
+그 밖의 이름과 종류는 AccessDenied여야 한다.
 값은 문서용 시험 대역(192.0.2.1)만 쓰고, 거부되어야 할 요청이 통과해 버리면 바로 지운다.
 """
 import argparse
@@ -45,21 +46,27 @@ def main() -> int:
         except ClientError as error:
             return error.response["Error"]["Code"]
 
-    allowed = record(f"*.{args.env_id}.onprem.{domain}")
+    scopes = ("onprem", "aws")  # infra/service-account/dns.tf가 허용하는 이름 범위와 같아야 한다
+    allowed = [record(f"*.{args.env_id}.{scope}.{domain}") for scope in scopes]
     must_be_denied = [
-        ("onprem 밖의 와일드카드(*.x.domain)", record(f"*.{args.env_id}.{domain}")),
-        ("와일드카드가 아닌 이름(www.env.onprem)", record(f"www.{args.env_id}.onprem.{domain}")),
+        ("범위 없는 와일드카드(*.x.domain)", record(f"*.{args.env_id}.{domain}")),
+        ("허용하지 않은 범위(*.x.gcp.domain)", record(f"*.{args.env_id}.gcp.{domain}")),
         ("루트에 가까운 이름(policytest.domain)", record(f"{args.env_id}.{domain}")),
-        ("같은 이름의 TXT 종류", record(f"*.{args.env_id}.onprem.{domain}", "TXT")),
     ]
+    for scope in scopes:
+        must_be_denied += [
+            (f"와일드카드가 아닌 이름(www.env.{scope})", record(f"www.{args.env_id}.{scope}.{domain}")),
+            (f"같은 이름의 TXT 종류({scope})", record(f"*.{args.env_id}.{scope}.{domain}", "TXT")),
+        ]
     try:
-        print("1) 허용되어야 할 요청: 환경 와일드카드 A 레코드")
-        outcome = change("UPSERT", allowed)
-        if outcome == "ok":
-            created.append(allowed)
-        expect(f"{allowed['Name']} 만들기 ({outcome})", outcome == "ok")
-        if outcome == "AccessDenied":
-            print("      정책이 너무 좁습니다. 정규화된 이름 패턴(끝의 점 등)을 다시 확인하세요.")
+        print("1) 허용되어야 할 요청: 환경 와일드카드 A 레코드(범위마다)")
+        for rec in allowed:
+            outcome = change("UPSERT", rec)
+            if outcome == "ok":
+                created.append(rec)
+            expect(f"{rec['Name']} 만들기 ({outcome})", outcome == "ok")
+            if outcome == "AccessDenied":
+                print("      정책이 너무 좁습니다. 정규화된 이름 패턴(끝의 점 등)과 이 범위가 허용 목록에 있는지 확인하세요.")
 
         print("2) 거부되어야 할 요청")
         for label, rec in must_be_denied:

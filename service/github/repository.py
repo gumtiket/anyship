@@ -63,13 +63,16 @@ def clone_repository(
     branch: str,
     destination: Path,
     token: str,
+    depth: int | None = None,
 ) -> Path:
+    """`depth`를 주면 그 개수만큼의 최근 커밋만 받는다(배포용 소스처럼 이력이 필요 없을 때)."""
     run_git(
         [
             "clone",
             "--single-branch",
             "--branch",
             branch,
+            *(["--depth", str(depth)] if depth is not None else []),
             f"https://github.com/{repo}.git",
             str(destination),
         ],

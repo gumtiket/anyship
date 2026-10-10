@@ -1,6 +1,7 @@
-"""Route 53에 환경 단위 와일드카드 레코드를 만들고 지운다(온프레미스 DNS).
+"""Route 53에 환경 단위 와일드카드 레코드를 만들고 지운다(온프레미스와 AWS 호스트용).
 
-레코드는 앱마다가 아니라 **환경(서버)마다 하나**다: `*.<환경ID>.onprem.<도메인>` -> 서버의 공인 IP.
+레코드는 앱마다가 아니라 **환경(서버)마다 하나**다: `*.<환경ID>.<범위>.<도메인>` -> 서버의 공인 IP.
+범위(scope)는 `onprem`(사용자 서버) 또는 `aws`(사용자 AWS 계정의 호스트)이고, 기본은 `onprem`이다.
 앱을 더 배포해도 DNS는 그대로이고, 환경을 삭제할 때만 지운다.
 
 boto3는 선택 의존성이라 처음 쓸 때 불러온다(이 모듈만 불러서는 boto3가 없어도 문제없다).
@@ -13,6 +14,7 @@ from typing import Any
 from .models import ENV_ID_PATTERN, AdapterError
 
 _ENV_ID = re.compile(ENV_ID_PATTERN)
+SCOPES = ("onprem", "aws")  # 서비스 서버 역할의 Route 53 정책(infra/service-account/dns.tf)이 허용하는 이름 범위와 같아야 한다
 
 
 class DnsError(Exception):
@@ -28,14 +30,17 @@ def _fail(code: str, message: str, hint: str | None = None, retryable: bool = Fa
 
 
 class WildcardRecords:
-    def __init__(self, client: Any = None, *, base_domain: str = "anyship.cloud", ttl: int = 60):
+    def __init__(self, client: Any = None, *, base_domain: str = "anyship.cloud", ttl: int = 60, scope: str = "onprem"):
+        if scope not in SCOPES:
+            raise ValueError("scope must be one of " + ", ".join(SCOPES))
         self._client = client  # 시험에서는 가짜 클라이언트를 끼워 넣는다
+        self._scope = scope
         self._domain = base_domain
         self._ttl = ttl
         self._zone: str | None = None
 
     def name_for(self, env_id: str) -> str:
-        return f"*.{env_id}.onprem.{self._domain}"
+        return f"*.{env_id}.{self._scope}.{self._domain}"
 
     def ensure(self, env_id: str, ip: str) -> bool:
         """레코드를 이 IP로 맞춘다(멱등). 바꿨으면 True, 이미 같으면 False."""
@@ -95,7 +100,7 @@ class WildcardRecords:
 
     def _current(self, env_id: str) -> dict | None:
         # Route 53은 와일드카드(*)를 \052로 돌려준다.
-        wanted = f"\\052.{env_id}.onprem.{self._domain}."
+        wanted = f"\\052.{env_id}.{self._scope}.{self._domain}."
         found = self._call(lambda api: api.list_resource_record_sets(
             HostedZoneId=self._zone_id(), StartRecordName=wanted, StartRecordType="A", MaxItems="1"))
         for record in found.get("ResourceRecordSets", []):

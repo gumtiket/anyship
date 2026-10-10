@@ -139,7 +139,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
     app.include_router(onboarding.router(settings, github, db, current, mutation, access_token))
     app.include_router(aws_onboarding.router(settings, aws_adapter, db, current, mutation))
     app.include_router(mock_deployments.router(settings, mock_runner, db, current, mutation))
-    app.include_router(deploy_api.router(settings, deploy_runner, db, current, mutation))
+    app.include_router(deploy_api.router(settings, deploy_runner, db, current, mutation, access_token))
 
     def installations(login):
         return github.installations(access_token(login))

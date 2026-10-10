@@ -54,6 +54,20 @@ def start(sessions, project="p1", request=None, now=NOW):
         return job.id, created
 
 
+def start_destroy(sessions, project="p1", request=None, now=NOW):
+    with sessions() as session:
+        job, created = claim(session, project, request or uuid.uuid4(), "runtime", action="destroy", now=now)
+        return job.id, created
+
+
+def deployed_target(sessions, project="p1"):
+    """배포까지 끝난 대상(현재 버전이 있다)."""
+    environment_id = target(sessions, project)
+    job_id, _ = start(sessions, project)
+    assert finish_ok(sessions, job_id)
+    return environment_id
+
+
 def deployment(sessions, project="p1"):
     with sessions() as session:
         return session.get(Deployment, project)
@@ -335,3 +349,110 @@ def test_job_json_has_no_internal_columns(sessions):
     assert set(shown) == {"id", "request_id", "action", "set_name", "image_tag", "status", "stage", "logs", "result",
                           "created_at", "finished_at"}
     assert ACTIVE == ("queued", "running")
+
+
+# --- 삭제 작업 ----------------------------------------------------------------------------
+def test_a_destroy_job_is_claimed_for_a_deployed_app_and_remembers_the_version_it_removes(sessions):
+    deployed_target(sessions)
+    job_id, created = start_destroy(sessions)
+    row, held = job_row(sessions, job_id), deployment(sessions)
+    assert created and (row.action, row.status, row.image_tag) == ("destroy", "queued", "abc1234def56")
+    assert (held.active_job_id, held.lease_until) == (job_id, NOW + LEASE_SECONDS)
+
+
+def test_nothing_can_be_destroyed_before_the_first_deployment_or_without_a_target(sessions):
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        claim(session, "p1", uuid.uuid4(), "runtime", action="destroy")
+    assert caught.value.code == "target_required"
+    target(sessions)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        claim(session, "p1", uuid.uuid4(), "runtime", action="destroy")
+    assert (caught.value.code, caught.value.status) == ("not_deployed", 409)
+    with sessions() as session:
+        assert session.scalar(select(DeployJob.id)) is None and session.get(Deployment, "p1").active_job_id is None
+
+
+def test_a_destroy_waits_for_a_running_job_and_a_deploy_waits_for_a_running_destroy(sessions):
+    deployed_target(sessions)
+    running, _ = start(sessions)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        claim(session, "p1", uuid.uuid4(), "runtime", action="destroy", now=NOW + 5)
+    assert caught.value.code == "deploy_job_running" and deployment(sessions).active_job_id == running
+    finish_ok(sessions, running)
+    destroying, _ = start_destroy(sessions, now=NOW + 10)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        claim(session, "p1", uuid.uuid4(), "runtime", now=NOW + 11)
+    assert caught.value.code == "deploy_job_running" and deployment(sessions).active_job_id == destroying
+
+
+def test_the_same_request_id_returns_the_same_destroy_but_never_a_different_action(sessions):
+    deployed_target(sessions)
+    request = uuid.uuid4()
+    first, created = start_destroy(sessions, request=request)
+    second, created_again = start_destroy(sessions, request=request, now=NOW + 5)
+    assert (first == second, created, created_again) == (True, True, False)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        claim(session, "p1", request, "runtime")  # 같은 요청 ID로 배포를 시도
+    assert caught.value.code == "request_conflict"
+
+
+def test_a_deploy_request_id_cannot_be_reused_for_a_destroy(sessions):
+    target(sessions)
+    request = uuid.uuid4()
+    start(sessions, request=request)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        claim(session, "p1", request, "runtime", action="destroy")
+    assert caught.value.code == "request_conflict"
+
+
+def test_an_unknown_action_is_a_programming_error(sessions):
+    target(sessions)
+    with sessions() as session, pytest.raises(ValueError):
+        claim(session, "p1", uuid.uuid4(), "runtime", action="rollback")
+
+
+def finish_destroyed(sessions, job_id):
+    with sessions() as session:
+        return finish(session, job_id, ok=True, result={"ok": True}, deployed={"image_tag": "", "url": "", "app_name": ""},
+                      now=NOW + 20)
+
+
+def test_a_successful_destroy_returns_the_target_to_not_deployed_and_frees_it_for_a_new_start(sessions):
+    environment_id = deployed_target(sessions)
+    job_id, _ = start_destroy(sessions)
+    assert finish_destroyed(sessions, job_id)
+    held, row = deployment(sessions), job_row(sessions, job_id)
+    assert (held.image_tag, held.url, held.app_name, held.active_job_id, held.lease_until) == ("", "", "", None, 0)
+    assert held.aws_environment_id == environment_id and row.status == "succeeded"
+    other = add_environment(sessions, number=4242)
+    with sessions() as session:  # 지운 뒤에는 환경을 다시 고를 수 있다
+        assert select_target(session, "p1", session.get(AwsEnvironment, other), "aws-always-on").aws_environment_id == other
+    assert start(sessions, now=NOW + 30)[1]  # 다시 배포할 수 있다
+
+
+def test_a_failed_destroy_keeps_what_is_running(sessions):
+    deployed_target(sessions)
+    job_id, _ = start_destroy(sessions)
+    with sessions() as session:
+        assert finish(session, job_id, ok=False, result={"ok": False, "error": {"code": "destroy_failed"}}, stage="destroy",
+                      now=NOW + 20)
+    held, row = deployment(sessions), job_row(sessions, job_id)
+    assert (held.image_tag, held.url, held.app_name, held.active_job_id) == (
+        "abc1234def56", "https://todo.test.aws.anyship.cloud", "todo", None)
+    assert (row.status, row.stage) == ("failed", "destroy")
+
+
+def test_a_destroy_cannot_be_started_twice_for_the_same_deployment(sessions):
+    deployed_target(sessions)
+    first, _ = start_destroy(sessions)
+    finish_destroyed(sessions, first)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        claim(session, "p1", uuid.uuid4(), "runtime", action="destroy", now=NOW + 40)
+    assert caught.value.code == "not_deployed"
+
+
+def test_an_expired_destroy_lease_is_taken_over_like_any_other(sessions):
+    deployed_target(sessions)
+    dead, _ = start_destroy(sessions)
+    fresh, created = start_destroy(sessions, now=NOW + LEASE_SECONDS)
+    assert created and fresh != dead and job_row(sessions, dead).status == "interrupted"

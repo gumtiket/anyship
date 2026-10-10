@@ -15,7 +15,9 @@
     APP_DEPLOY_VERIFY_TLS=false \\
     python -u ../scripts/smoke_deploy_api.py --database ~/anyship-test.db --environment-id <시드가 출력한 ID>
 
-소스는 `<APP_DEPLOY_SOURCE_DIR>/<저장소 이름>/`에 있어야 한다(`make_sample_repo.py`로 만든다). 첫 배포에 공용 기반이 없으면 약 20분이 걸린다.
+소스는 `<APP_DEPLOY_SOURCE_DIR>/<저장소 이름>/`에 있어야 한다(`make_sample_repo.py`로 만든다). 이 스크립트는 가짜 로그인 세션을 쓰므로
+GitHub 토큰이 없어서 **소스를 항상 로컬 폴더로 읽는다**(`APP_DEPLOY_SOURCE=local`로 고정). GitHub에서 받는 경로는 웹 화면으로 확인한다.
+첫 배포에 공용 기반이 없으면 약 20분이 걸린다.
 """
 import argparse
 import hashlib
@@ -87,7 +89,7 @@ def main() -> int:
     # 운영 DB를 가리키지 않도록 이 스크립트가 직접 만든 설정만 쓴다. 배포 설정(APP_DEPLOY_*)만 환경변수에서 읽는다.
     settings = Settings(database_url=url, app_origin=ORIGIN, token_key=Fernet.generate_key().decode(),
                         github_client_id="local", github_client_secret="local", github_app_slug="local",
-                        deployment_mode="real", **Settings._deploy_from_env())
+                        deployment_mode="real", **{**Settings._deploy_from_env(), "deploy_source": "local"})  # 가짜 로그인에는 GitHub 토큰이 없어 폴더 소스로 고정한다
     engine, sessions = database(url)
 
     with sessions() as session:

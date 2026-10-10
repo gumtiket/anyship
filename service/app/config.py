@@ -30,7 +30,9 @@ class Settings:
     aws_role_name: str = "deploy-service-role"
     aws_verify: str = ""  # "sts"면 환경 등록의 연결 확인에 STSAdapter를 쓴다. 기본은 꺼짐(어댑터 연결 대기)
     # 실제 배포(deployment_mode="real")에서만 쓴다. 비밀이 아닌 값뿐이다(개인 키는 경로만 받고 내용을 읽지 않는다).
-    deploy_source_dir: Path | None = None  # 받아 둔 소스를 두는 폴더. 저장소 이름과 같은 하위 폴더를 배포한다
+    deploy_source: str = "github"  # github: 연결한 저장소를 사용자 토큰으로 받는다. local: 서버 폴더에 받아 둔 소스를 쓴다(시험용)
+    deploy_source_dir: Path | None = None  # local일 때만: 받아 둔 소스를 두는 폴더. 저장소 이름과 같은 하위 폴더를 배포한다
+    deploy_workspace: Path = Path(__file__).resolve().parents[1] / "workspaces" / "deploy-src"  # github일 때 받은 소스를 잠시 두는 곳
     deploy_ssh_key: Path | None = None  # 호스트 접속용 개인 키 파일. 공개 키는 같은 이름 + ".pub"
     deploy_service_ip: str = ""  # 호스트의 SSH(22)를 이 서비스 서버 주소에만 연다
     deploy_acme_email: str = ""  # Traefik의 Let's Encrypt 연락 주소
@@ -38,6 +40,7 @@ class Settings:
     deploy_terraform_dir: Path = Path(__file__).resolve().parents[2] / "infra" / "user-account"
     deploy_plugin_cache: Path = Path.home() / ".terraform.d" / "plugin-cache"
     deploy_verify_tls: bool = True  # False는 Let's Encrypt staging 인증서를 시험할 때만
+    deploy_dns: bool = True  # False면 앱 주소의 DNS 레코드(*.<환경ID>.aws.<도메인>)를 서비스가 맞추지 않는다(수동으로 관리)
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
 
@@ -75,7 +78,9 @@ class Settings:
         # 값이 아니라 이름만 알린다. 빠진 설정은 서버가 뜰 때 바로 알려 20분짜리 작업 중에 드러나지 않게 한다.
         if self.demo:
             raise ValueError("APP_DEPLOYMENT_MODE=real cannot be used with APP_DEMO=true.")
-        missing = [name for name, value in (("APP_DEPLOY_SOURCE_DIR", self.deploy_source_dir),
+        if self.deploy_source not in ("github", "local"):
+            raise ValueError("APP_DEPLOY_SOURCE must be github or local.")
+        missing = [name for name, value in (("APP_DEPLOY_SOURCE_DIR", self.deploy_source_dir or self.deploy_source != "local"),
                                             ("APP_DEPLOY_SSH_KEY", self.deploy_ssh_key),
                                             ("APP_DEPLOY_SERVICE_IP", self.deploy_service_ip),
                                             ("APP_DEPLOY_ACME_EMAIL", self.deploy_acme_email),
@@ -138,12 +143,17 @@ class Settings:
             value = os.getenv(name, "").strip()
             return Path(value).expanduser() if value else None
 
-        values = {"deploy_source_dir": path("APP_DEPLOY_SOURCE_DIR"), "deploy_ssh_key": path("APP_DEPLOY_SSH_KEY"),
+        dns = os.getenv("APP_DEPLOY_DNS", "").strip().lower() or "on"  # 비워 두면 기본값
+        if dns not in ("on", "off"):
+            raise ValueError("APP_DEPLOY_DNS must be on or off.")
+        source = os.getenv("APP_DEPLOY_SOURCE", "").strip().lower() or "github"
+        values = {"deploy_source": source, "deploy_source_dir": path("APP_DEPLOY_SOURCE_DIR"), "deploy_dns": dns == "on", "deploy_ssh_key": path("APP_DEPLOY_SSH_KEY"),
                   "deploy_service_ip": os.getenv("APP_DEPLOY_SERVICE_IP", "").strip(),
                   "deploy_acme_email": os.getenv("APP_DEPLOY_ACME_EMAIL", "").strip(),
                   "deploy_base_domain": os.getenv("APP_DEPLOY_BASE_DOMAIN", "").strip().lower(),
                   "deploy_verify_tls": os.getenv("APP_DEPLOY_VERIFY_TLS", "true").strip().lower() != "false"}
-        for key, name in (("deploy_terraform_dir", "APP_DEPLOY_TERRAFORM_DIR"), ("deploy_plugin_cache", "APP_DEPLOY_PLUGIN_CACHE")):
+        for key, name in (("deploy_terraform_dir", "APP_DEPLOY_TERRAFORM_DIR"), ("deploy_plugin_cache", "APP_DEPLOY_PLUGIN_CACHE"),
+                          ("deploy_workspace", "APP_DEPLOY_WORKSPACE")):
             if path(name):
                 values[key] = path(name)
         return values

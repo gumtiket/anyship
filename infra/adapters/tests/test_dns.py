@@ -39,11 +39,11 @@ def stubbed():
     return client, Stubber(client)
 
 
-def expect_lookup(stub, records, zone=True):
+def expect_lookup(stub, records, zone=True, name=NAME):
     if zone:
         stub.add_response("list_hosted_zones_by_name", ZONE, {"DNSName": "anyship.cloud.", "MaxItems": "1"})
     stub.add_response("list_resource_record_sets", listed(records),
-                      {"HostedZoneId": "Z123", "StartRecordName": NAME, "StartRecordType": "A", "MaxItems": "1"})
+                      {"HostedZoneId": "Z123", "StartRecordName": name, "StartRecordType": "A", "MaxItems": "1"})
 
 
 def expect_change(stub, expected=None):
@@ -235,3 +235,70 @@ def test_the_record_name_is_one_wildcard_per_environment_under_the_configured_do
     assert WildcardRecords(ExplodingClient()).name_for("demo") == "*.demo.onprem.anyship.cloud"
     assert WildcardRecords(ExplodingClient(), base_domain="example.org").name_for("team7") == \
         "*.team7.onprem.example.org"
+
+
+# --- AWS 범위 ---------------------------------------------------------------------------------
+AWS_NAME = "\\052.demo.aws.anyship.cloud."  # Route 53은 와일드카드(*)를 \052로 돌려준다
+AWS_RECORD = {**RECORD, "Name": AWS_NAME}
+
+
+def test_the_aws_scope_names_its_records_under_aws_and_the_default_stays_onprem():
+    assert WildcardRecords(ExplodingClient(), scope="aws").name_for("demo") == "*.demo.aws.anyship.cloud"
+    assert WildcardRecords(ExplodingClient(), scope="aws", base_domain="example.org").name_for("team7") == "*.team7.aws.example.org"
+    assert WildcardRecords(ExplodingClient()).name_for("demo") == "*.demo.onprem.anyship.cloud"
+
+
+def test_an_aws_record_is_created_with_an_upsert_under_aws():
+    client, stub = stubbed()
+    expect_lookup(stub, [], name=AWS_NAME)
+    expect_change(stub, batch("UPSERT", {"Name": "*.demo.aws.anyship.cloud", "Type": "A", "TTL": 60,
+                                         "ResourceRecords": [{"Value": "3.38.88.141"}]}))
+    with stub:
+        assert WildcardRecords(client, scope="aws").ensure("demo", "3.38.88.141") is True
+        stub.assert_no_pending_responses()
+
+
+def test_an_aws_record_with_the_right_value_is_left_alone_and_a_new_ip_updates_it():
+    client, stub = stubbed()
+    expect_lookup(stub, [AWS_RECORD], name=AWS_NAME)
+    with stub:
+        assert WildcardRecords(client, scope="aws").ensure("demo", "3.38.88.141") is False
+    client, stub = stubbed()
+    expect_lookup(stub, [AWS_RECORD], name=AWS_NAME)
+    expect_change(stub, batch("UPSERT", {"Name": "*.demo.aws.anyship.cloud", "Type": "A", "TTL": 60,
+                                         "ResourceRecords": [{"Value": "52.78.1.1"}]}))
+    with stub:
+        assert WildcardRecords(client, scope="aws").ensure("demo", "52.78.1.1") is True
+
+
+def test_the_other_scopes_record_for_the_same_environment_is_never_taken_for_ours():
+    # aws 범위가 같은 환경 ID의 onprem 레코드를 현재 값으로 보면, 새 레코드를 만들지 않고 잘못 끝난다.
+    client, stub = stubbed()
+    expect_lookup(stub, [RECORD], name=AWS_NAME)
+    expect_change(stub)
+    with stub:
+        assert WildcardRecords(client, scope="aws").ensure("demo", "3.38.88.141") is True
+        stub.assert_no_pending_responses()
+    client, stub = stubbed()
+    expect_lookup(stub, [AWS_RECORD])
+    expect_change(stub)
+    with stub:
+        assert WildcardRecords(client).ensure("demo", "3.38.88.141") is True  # onprem 범위는 aws 레코드를 무시한다
+
+
+def test_removing_in_the_aws_scope_deletes_only_the_aws_record():
+    client, stub = stubbed()
+    expect_lookup(stub, [AWS_RECORD], name=AWS_NAME)
+    expect_change(stub, batch("DELETE", AWS_RECORD))
+    with stub:
+        assert WildcardRecords(client, scope="aws").remove("demo") is True
+    client, stub = stubbed()
+    expect_lookup(stub, [RECORD], name=AWS_NAME)  # 같은 환경의 onprem 레코드만 있으면 지울 것이 없다
+    with stub:
+        assert WildcardRecords(client, scope="aws").remove("demo") is False
+
+
+@pytest.mark.parametrize("scope", ["", "ONPREM", "onprem.x", "gcp", "aws ", "*", "a/b"])
+def test_an_unknown_scope_is_refused_before_anything_else(scope):
+    with pytest.raises(ValueError):
+        WildcardRecords(ExplodingClient(), scope=scope)
