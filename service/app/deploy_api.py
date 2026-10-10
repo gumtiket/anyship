@@ -1,14 +1,16 @@
 """실제 배포 API. 모의 배포(`/mock-deployment`)와 경로와 코드가 분리되어 있다.
 
-`POST /jobs`의 본문에는 사용자가 입력한 비밀이 들어 있다. 비밀은 실행기로 메모리에서만 넘기고 응답, 로그, DB 어디에도 남기지 않는다.
+`POST /jobs`는 배포(`action` 기본값)와 배포 삭제(`"destroy"`)를 같은 선점, 멱등, 로그 저장으로 처리한다. 삭제는 앱의 컨테이너와 서버의 앱 폴더만
+지운다(앱 DB, 공용 기반, DNS는 남는다). 본문에는 사용자가 입력한 비밀이 들어 있을 수 있다(삭제에는 비밀을 받지 않는다). 비밀은 실행기로 메모리에서만 넘기고 응답, 로그, DB 어디에도 남기지 않는다.
 검증 오류 응답에 입력값이 섞이지 않도록 이 경로의 422는 `app.py`의 처리기가 고정 문구로 바꾼다.
 """
 import re
 import time
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 
 from .db import AwsEnvironment, DeployJob, Deployment, Project
@@ -33,6 +35,7 @@ class TargetInput(BaseModel):
 class JobInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: uuid.UUID
+    action: Literal["deploy", "destroy"] = "deploy"
     secrets: dict[str, str] = Field(default_factory=dict, max_length=MAX_SECRETS)
 
     @field_validator("secrets")
@@ -42,6 +45,12 @@ class JobInput(BaseModel):
         if any(not _SECRET_NAME.match(name) or len(item) > MAX_SECRET_LENGTH for name, item in value.items()):
             raise ValueError("invalid secrets")
         return value
+
+    @model_validator(mode="after")
+    def destroy_takes_no_secrets(self):
+        if self.action == "destroy" and self.secrets:
+            raise ValueError("a destroy takes no secrets")  # 값은 오류에 싣지 않는다
+        return self
 
 
 def router(settings, runner, db, current, mutation):
@@ -107,7 +116,10 @@ def router(settings, runner, db, current, mutation):
     def submit(project_id: str, body: JobInput, response: Response, login=Depends(mutation), session=Depends(db)):
         row = project(session, login, project_id)
         try:
-            created_job, created = runner.submit(session, row, body.request_id, body.secrets)
+            if body.action == "destroy":
+                created_job, created = runner.submit_destroy(session, row, body.request_id)
+            else:
+                created_job, created = runner.submit(session, row, body.request_id, body.secrets)
         except DeploymentError as error:
             fail(error.status, error.code, error.message)
         except (DeployStateError, SourceError) as error:

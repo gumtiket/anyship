@@ -73,6 +73,11 @@ def deploy(web, request_id=None, secrets=None):
     return web.client.post(web.endpoint + "/jobs", headers=web.headers, json=body)
 
 
+def destroy(web, request_id=None, **extra):
+    return web.client.post(web.endpoint + "/jobs", headers=web.headers,
+                           json={"request_id": request_id or str(uuid.uuid4()), "action": "destroy", **extra})
+
+
 def ready(web):
     environment_id = make_environment(web)
     assert put_target(web, environment_id).status_code == 200
@@ -302,3 +307,117 @@ def test_an_environment_used_as_a_target_cannot_be_deleted_until_the_project_is_
     assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "environment_in_use")
     web.client.delete(f"/api/projects/{web.project['id']}", headers=web.headers)
     assert web.client.delete(f"/api/aws/environments/{environment_id}", headers=web.headers).status_code == 204
+
+
+# --- 배포 삭제 -----------------------------------------------------------------------------
+def test_a_deployed_app_can_be_removed_and_the_target_goes_back_to_not_deployed(web):
+    ready(web)
+    deploy(web)
+    assert web.client.get(web.endpoint).json()["target"]["deployed"] is True
+    response = destroy(web)
+    assert response.status_code == 202
+    job = web.client.get(f"{web.endpoint}/jobs/{response.json()['id']}").json()
+    assert (job["action"], job["status"], job["stage"], job["image_tag"]) == ("destroy", "succeeded", "", SHA)
+    target = web.client.get(web.endpoint).json()["target"]
+    assert (target["deployed"], target["image_tag"], target["url"], target["app_name"], target["busy"]) == (False, "", "", "", False)
+    assert [item["action"] for item in web.client.get(web.endpoint + "/jobs").json()] == ["destroy", "deploy"]
+    (call,) = web.runner.deployer.destroy_calls
+    assert (call["app"], call["set_name"]) == ("todo", "aws-always-on")
+
+
+def test_after_a_removal_the_environment_can_be_changed_and_the_app_deployed_again(web):
+    ready(web)
+    deploy(web)
+    destroy(web)
+    other = make_environment(web, role_arn=ROLE.replace("role/", "role/second-"))
+    assert put_target(web, other).status_code == 200
+    assert deploy(web).status_code == 202 and web.client.get(web.endpoint).json()["target"]["deployed"] is True
+
+
+def test_a_removal_is_refused_when_nothing_was_deployed_or_nothing_is_selected(web):
+    refused = destroy(web)
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "target_required")
+    ready(web)
+    refused = destroy(web)
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "not_deployed")
+    assert web.client.get(web.endpoint + "/jobs").json() == [] and web.runner.deployer.destroy_calls == []
+
+
+def test_a_removal_is_refused_for_an_environment_that_is_not_connected(web):
+    environment_id = ready(web)
+    deploy(web)
+    with web.app.state.sessions() as session:
+        session.get(AwsEnvironment, environment_id).status = "FAILED"
+        session.commit()
+    refused = destroy(web)
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "environment_not_connected")
+    assert web.runner.deployer.destroy_calls == []
+
+
+def test_the_same_removal_request_returns_the_same_job_and_runs_once(web):
+    ready(web)
+    deploy(web)
+    request_id = str(uuid.uuid4())
+    first, second = destroy(web, request_id), destroy(web, request_id)
+    assert (first.status_code, second.status_code, first.json()["id"] == second.json()["id"]) == (202, 200, True)
+    assert len(web.runner.deployer.destroy_calls) == 1
+
+
+def test_a_request_id_cannot_switch_between_deploying_and_removing(web):
+    ready(web)
+    request_id = str(uuid.uuid4())
+    deploy(web, request_id)
+    refused = destroy(web, request_id)
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "request_conflict")
+
+
+def test_a_removal_takes_no_secrets_and_never_echoes_them(web):
+    ready(web)
+    deploy(web)
+    refused = destroy(web, secrets={"API_KEY": USER_SECRET})
+    assert refused.status_code == 422 and USER_SECRET not in refused.text
+    assert web.runner.deployer.destroy_calls == []
+    assert destroy(web, secrets={}).status_code == 202  # 비어 있는 비밀은 괜찮다(화면이 항상 보낸다)
+
+
+def test_an_unknown_action_is_refused_without_echoing_it(web):
+    ready(web)
+    refused = web.client.post(web.endpoint + "/jobs", headers=web.headers,
+                              json={"request_id": str(uuid.uuid4()), "action": USER_SECRET})
+    assert refused.status_code == 422 and USER_SECRET not in refused.text
+
+
+def test_a_removal_waits_for_a_running_deploy(database_url, tmp_path):
+    executor = DeferredExecutor()
+    app, runner, _ = build_web(database_url, tmp_path, executor=executor)
+    with TestClient(app, base_url=ORIGIN) as client:
+        headers = authenticate(client)
+        project = add(client, headers).json()
+        web = SimpleNamespace(app=app, client=client, headers=headers, endpoint=f"/api/projects/{project['id']}/deployment")
+        put_target(web, make_environment(web))
+        deploy(web)
+        executor.run_all()
+        deploy(web)  # 두 번째 배포가 대기 중
+        refused = destroy(web)
+        assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "deploy_job_running")
+        executor.run_all()
+        assert destroy(web).status_code == 202
+
+
+def test_removal_needs_the_csrf_token(web):
+    ready(web)
+    deploy(web)
+    refused = web.client.post(web.endpoint + "/jobs", headers={"Origin": ORIGIN},
+                              json={"request_id": str(uuid.uuid4()), "action": "destroy"})
+    assert refused.status_code == 403 and web.runner.deployer.destroy_calls == []
+
+
+def test_a_failed_removal_keeps_the_deployment_and_shows_why(web):
+    from anyship_adapters import DestroyResult
+    ready(web)
+    deploy(web)
+    web.runner.deployer.destroy_behaviour = lambda log: DestroyResult(
+        ok=False, error=AdapterError(code="destroy_failed", message="컨테이너를 지우지 못했습니다.", hint="서버를 확인해 주세요."))
+    job = web.client.get(f"{web.endpoint}/jobs/{destroy(web).json()['id']}").json()
+    assert (job["status"], job["stage"], job["result"]["error"]["code"]) == ("failed", "destroy", "destroy_failed")
+    assert web.client.get(web.endpoint).json()["target"]["deployed"] is True
