@@ -16,7 +16,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from anyship_adapters import AdapterError, DeployResult, redact_event, redact_model
+from anyship_adapters import AdapterError, DeployResult, DestroyResult, redact_event, redact_model
 from anyship_adapters.aws_always_on import AwsAlwaysOnAdapter
 from anyship_adapters.deployer import Deployer
 from anyship_adapters.dns import WildcardRecords
@@ -26,7 +26,7 @@ from anyship_adapters.terraform_runner import TerraformRunner
 
 from .db import AwsEnvironment, DeployJob, Deployment
 from .deploy_state import DeployStateError, adapter_environment, ensure_state_bucket, save_foundation
-from .deployments import ACTIVE, append_logs, claim, extend_lease, finish, interrupt_all
+from .deployments import ACTIVE, DeploymentError, append_logs, claim, extend_lease, finish, interrupt_all
 from .source import SourceError, SourceProvider
 
 FLUSH_EVENTS, FLUSH_SECONDS = 20, 2.0
@@ -151,13 +151,30 @@ class DeployRunner:
         job, created = claim(session, project.id, request_id, self.runtime_id,
                              image_tag=fetched.commit_sha if fetched else "")
         if created:
-            try:
-                self.executor.submit(self._run, job.id, environment.id, fetched, dict(secrets))
-            except RuntimeError:
-                finish(session, job.id, ok=False, stage="runner", result=self._failure(
-                    "worker_stopping", "서버 종료 중입니다. 다시 시도해 주세요."))
-                session.refresh(job)
+            self._start(session, job, self._run, job.id, environment.id, fetched, dict(secrets))
         return job, created
+
+    def submit_destroy(self, session, project, request_id):
+        """요청 안에서: 배포된 앱을 지우는 작업을 선점해 스레드에 넘긴다. (작업, 새로 만들었는지).
+        지우는 것은 앱의 컨테이너, 볼륨, 서버의 앱 폴더뿐이다. 앱 DB와 공용 기반(호스트, RDS), DNS 레코드는 남는다."""
+        target = session.get(Deployment, project.id)
+        environment = session.get(AwsEnvironment, target.aws_environment_id) if target else None
+        if environment is not None:
+            adapter_environment(environment)  # 연결이 확인되지 않은 환경은 여기서 거절한다
+        if target is not None and target.image_tag and not target.app_name:  # 배포 기록이 어긋난 경우(앱 이름을 모르면 지울 수 없다)
+            raise DeploymentError(409, "app_name_missing", "배포한 앱의 이름을 알 수 없어 지울 수 없습니다. 다시 배포한 뒤 지워 주세요.")
+        job, created = claim(session, project.id, request_id, self.runtime_id, action="destroy")
+        if created:
+            self._start(session, job, self._run_destroy, job.id, environment.id, target.app_name)
+        return job, created
+
+    def _start(self, session, job, function, *args) -> None:
+        try:
+            self.executor.submit(function, *args)
+        except RuntimeError:  # 서버를 멈추는 중이다
+            finish(session, job.id, ok=False, stage="runner", result=self._failure(
+                "worker_stopping", "서버 종료 중입니다. 다시 시도해 주세요."))
+            session.refresh(job)
 
     @staticmethod
     def _failure(code: str, message: str, hint: str | None = None, retryable: bool = True) -> dict:
@@ -192,6 +209,38 @@ class DeployRunner:
                 hint="서비스 서버의 로그를 확인해 주세요.", retryable=True), details={"stage": "runner", "exception": type(exc).__name__})
         sink.flush()
         self._end(job_id, result, fetched, known)
+
+    def _run_destroy(self, job_id: str, environment_id: str, app_name: str) -> None:
+        sink = LogSink(lambda events: self._store(job_id, events))
+        stage = "destroy"
+        try:
+            with self.sessions() as session:
+                job = session.get(DeployJob, job_id)
+                if job is None or job.status not in ACTIVE:
+                    return
+                job.status = "running"
+                set_name = job.set_name
+                session.commit()
+                try:
+                    env = adapter_environment(session.get(AwsEnvironment, environment_id))
+                except DeployStateError as exc:
+                    stage = "environment"
+                    result = DestroyResult(ok=False, error=AdapterError(code=exc.code, message=exc.message))
+                else:
+                    result = None
+            if result is None:
+                result = self.deployer.destroy(env, app_name, sink.add, set_name=set_name)
+        except Exception as exc:
+            # 예기치 않은 예외의 원문에는 비밀이 섞일 수 있다. 종류만 남긴다.
+            stage = "runner"
+            result = DestroyResult(ok=False, error=AdapterError(
+                code="deploy_runner_error", message="삭제 중 예기치 않은 오류가 발생했습니다.",
+                hint="서비스 서버의 로그를 확인해 주세요.", retryable=True), details={"exception": type(exc).__name__})
+        sink.flush()
+        with self.sessions() as session:
+            finish(session, job_id, ok=result.ok, result=redact_model(result).model_dump(mode="json"),
+                   stage="" if result.ok else stage,
+                   deployed={"image_tag": "", "url": "", "app_name": ""} if result.ok else None)  # 지운 뒤에는 "아직 배포하지 않음"
 
     def _store(self, job_id: str, events: list) -> None:
         with self.sessions() as session:

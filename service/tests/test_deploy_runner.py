@@ -2,7 +2,7 @@ import json
 import uuid
 from types import SimpleNamespace
 
-from anyship_adapters import AdapterError, DeployResult, LogEvent
+from anyship_adapters import AdapterError, DeployResult, DestroyResult, LogEvent
 import pytest
 from sqlalchemy import select
 
@@ -64,8 +64,16 @@ class FakeSource:
 
 
 class FakeDeployer:
-    def __init__(self, behaviour=None):
+    def __init__(self, behaviour=None, destroy_behaviour=None):
         self.calls, self.behaviour = [], behaviour
+        self.destroy_calls, self.destroy_behaviour = [], destroy_behaviour
+
+    def destroy(self, env, app, log, *, set_name):
+        self.destroy_calls.append(dict(env=env, app=app, set_name=set_name))
+        if self.destroy_behaviour:
+            return self.destroy_behaviour(log)
+        log(LogEvent(message="컨테이너와 볼륨 제거", step=1, total=1, name="앱 삭제"))
+        return DestroyResult(ok=True)
 
     def deploy(self, env, spec, source_dir, commit_sha, secrets, log, *, set_name):
         self.calls.append(dict(env=env, spec=spec, source_dir=source_dir, commit_sha=commit_sha, secrets=secrets,
@@ -127,6 +135,12 @@ def build(sessions, tmp_path, database_url, *, select=True, executor=None, sourc
     runner.start()
     runner.executor = executor or runner.executor
     return runner, environment_id
+
+
+def submit_destroy(sessions, runner, request=None):
+    with sessions() as session:
+        job, created = runner.submit_destroy(session, session.get(Project, "p1"), request or uuid.uuid4())
+        return job.id, created
 
 
 def submit(sessions, runner, request=None, secrets=None):
@@ -482,3 +496,155 @@ def test_an_unusable_public_key_stops_the_server_without_echoing_it(sessions, tm
     with pytest.raises(RuntimeError) as caught:
         DeployRunner.from_settings(settings, sessions)
     assert "not a key" not in str(caught.value)
+
+
+# --- 삭제 ----------------------------------------------------------------------------------
+def deployed_runner(sessions, tmp_path, database_url, **options):
+    """한 번 배포가 끝난 실행기(현재 버전, 주소, 앱 이름, 기반 값이 저장되어 있다)."""
+    runner, environment_id = build(sessions, tmp_path, database_url, **options)
+    submit(sessions, runner)
+    return runner, environment_id
+
+
+def test_a_destroy_runs_the_deployer_for_the_deployed_app_and_returns_the_target_to_not_deployed(sessions, tmp_path, database_url):
+    deployer = FakeDeployer()
+    runner, environment_id = deployed_runner(sessions, tmp_path, database_url, deployer=deployer)
+    assert deployment(sessions).image_tag == SHA
+    job_id, created = submit_destroy(sessions, runner)
+    row, held = job_row(sessions, job_id), deployment(sessions)
+    assert created and (row.action, row.status, row.stage, row.image_tag) == ("destroy", "succeeded", "", SHA)
+    assert json.loads(row.result_json)["ok"] is True
+    assert (held.image_tag, held.url, held.app_name, held.active_job_id, held.lease_until) == ("", "", "", None, 0)
+    (call,) = deployer.destroy_calls
+    assert (call["app"], call["set_name"], call["env"].env_id) == ("todo", "aws-always-on", "test")
+    assert call["env"].host == FOUNDATION["host"]  # 배포가 저장해 둔 기반 값으로 호스트에 접속한다
+    assert [e["message"] for e in json.loads(row.logs_json)] == ["컨테이너와 볼륨 제거"]
+
+
+def test_after_a_destroy_the_app_can_be_deployed_again(sessions, tmp_path, database_url):
+    runner, _ = deployed_runner(sessions, tmp_path, database_url)
+    submit_destroy(sessions, runner)
+    again, created = submit(sessions, runner)
+    assert created and job_row(sessions, again).status == "succeeded" and deployment(sessions).image_tag == SHA
+
+
+def test_a_failed_destroy_records_the_stage_and_keeps_the_deployment_as_it_was(sessions, tmp_path, database_url):
+    def fails(log):
+        log(LogEvent(level="error", message="컨테이너를 지우지 못했습니다."))
+        return DestroyResult(ok=False, error=AdapterError(code="destroy_failed", message="컨테이너를 지우지 못했습니다.",
+                                                          hint="서버에서 docker compose down을 확인해 주세요."))
+
+    runner, _ = deployed_runner(sessions, tmp_path, database_url, deployer=FakeDeployer(destroy_behaviour=fails))
+    job_id, _ = submit_destroy(sessions, runner)
+    row, held = job_row(sessions, job_id), deployment(sessions)
+    assert (row.status, row.stage) == ("failed", "destroy") and json.loads(row.result_json)["error"]["code"] == "destroy_failed"
+    assert (held.image_tag, held.url, held.app_name, held.active_job_id) == (SHA, URL, "todo", None)
+
+
+def test_an_unexpected_exception_in_a_destroy_is_reported_without_its_text(sessions, tmp_path, database_url):
+    def explodes(log):
+        raise RuntimeError(f"leaked {USER_SECRET}")
+
+    runner, _ = deployed_runner(sessions, tmp_path, database_url, deployer=FakeDeployer(destroy_behaviour=explodes))
+    job_id, _ = submit_destroy(sessions, runner)
+    row = job_row(sessions, job_id)
+    result = json.loads(row.result_json)
+    assert (row.status, row.stage, result["error"]["code"]) == ("failed", "runner", "deploy_runner_error")
+    assert USER_SECRET not in everything_in_the_database(sessions) and deployment(sessions).image_tag == SHA
+
+
+def test_nothing_is_destroyed_before_a_first_deployment(sessions, tmp_path, database_url):
+    deployer = FakeDeployer()
+    runner, _ = build(sessions, tmp_path, database_url, deployer=deployer)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        runner.submit_destroy(session, session.get(Project, "p1"), uuid.uuid4())
+    assert caught.value.code == "not_deployed" and deployer.destroy_calls == []
+    with sessions() as session:
+        assert session.scalar(select(DeployJob.id)) is None
+
+
+def test_a_destroy_needs_a_target(sessions, tmp_path, database_url):
+    runner, _ = build(sessions, tmp_path, database_url, select=False)
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        runner.submit_destroy(session, session.get(Project, "p1"), uuid.uuid4())
+    assert caught.value.code == "target_required"
+
+
+def test_an_environment_that_is_not_connected_is_refused_before_any_job(sessions, tmp_path, database_url):
+    deployer = FakeDeployer()
+    runner, environment_id = deployed_runner(sessions, tmp_path, database_url, deployer=deployer)
+    with sessions() as session:
+        session.get(AwsEnvironment, environment_id).status = "FAILED"
+        session.commit()
+    with sessions() as session, pytest.raises(DeployStateError):
+        runner.submit_destroy(session, session.get(Project, "p1"), uuid.uuid4())
+    assert deployer.destroy_calls == [] and deployment(sessions).active_job_id is None
+
+
+def test_a_deployment_record_without_an_app_name_cannot_be_destroyed(sessions, tmp_path, database_url):
+    deployer = FakeDeployer()
+    runner, _ = deployed_runner(sessions, tmp_path, database_url, deployer=deployer)
+    with sessions() as session:
+        session.get(Deployment, "p1").app_name = ""
+        session.commit()
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        runner.submit_destroy(session, session.get(Project, "p1"), uuid.uuid4())
+    assert caught.value.code == "app_name_missing" and deployer.destroy_calls == []
+    assert deployment(sessions).active_job_id is None
+
+
+def test_the_same_destroy_request_runs_only_once(sessions, tmp_path, database_url):
+    deployer = FakeDeployer()
+    runner, _ = deployed_runner(sessions, tmp_path, database_url, deployer=deployer)
+    request = uuid.uuid4()
+    first, created = submit_destroy(sessions, runner, request)
+    second, created_again = submit_destroy(sessions, runner, request)
+    assert (first == second, created, created_again, len(deployer.destroy_calls)) == (True, True, False, 1)
+
+
+def test_a_destroy_waits_for_a_running_deploy(sessions, tmp_path, database_url):
+    executor = DeferredExecutor()
+    runner, _ = deployed_runner(sessions, tmp_path, database_url, executor=executor)
+    executor.run_all()  # 앞서 배포한 작업이 끝나 있다
+    submit(sessions, runner)  # 새 배포가 대기 중
+    with sessions() as session, pytest.raises(DeploymentError) as caught:
+        runner.submit_destroy(session, session.get(Project, "p1"), uuid.uuid4())
+    assert caught.value.code == "deploy_job_running"
+    executor.run_all()
+    assert submit_destroy(sessions, runner)[1]
+
+
+def test_a_destroy_interrupted_before_its_thread_starts_never_touches_the_host(sessions, tmp_path, database_url):
+    executor, deployer = DeferredExecutor(), FakeDeployer()
+    runner, _ = deployed_runner(sessions, tmp_path, database_url, executor=executor, deployer=deployer)
+    executor.run_all()
+    job_id, _ = submit_destroy(sessions, runner)
+    runner.close()
+    executor.run_all()
+    assert deployer.destroy_calls == [] and job_row(sessions, job_id).status == "interrupted"
+    assert deployment(sessions).image_tag == SHA  # 지워진 것이 없으니 상태도 그대로다
+
+
+def test_a_destroy_during_shutdown_fails_the_job_and_frees_the_project(sessions, tmp_path, database_url):
+    runner, _ = deployed_runner(sessions, tmp_path, database_url)
+    runner.executor = ClosedExecutor()
+    job_id, _ = submit_destroy(sessions, runner)
+    row = job_row(sessions, job_id)
+    assert (row.status, row.stage) == ("failed", "runner") and deployment(sessions).active_job_id is None
+    assert deployment(sessions).image_tag == SHA
+
+
+def test_an_environment_that_stops_being_connected_before_the_thread_runs_fails_the_destroy_without_touching_the_host(
+        sessions, tmp_path, database_url):
+    executor, deployer = DeferredExecutor(), FakeDeployer()
+    runner, environment_id = deployed_runner(sessions, tmp_path, database_url, executor=executor, deployer=deployer)
+    executor.run_all()
+    job_id, _ = submit_destroy(sessions, runner)
+    with sessions() as session:
+        session.get(AwsEnvironment, environment_id).status = "FAILED"
+        session.commit()
+    executor.run_all()
+    row = job_row(sessions, job_id)
+    assert (row.status, row.stage) == ("failed", "environment") and deployer.destroy_calls == []
+    assert json.loads(row.result_json)["error"]["code"] == "environment_not_connected"
+    assert deployment(sessions).image_tag == SHA and deployment(sessions).active_job_id is None
