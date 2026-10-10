@@ -241,14 +241,35 @@ record/replay CLI의 패키징은 고정 템플릿이며 artifact-llm은 none이
 
 ```sh
 # 사전 결과 표시. hit는 현재 Bedrock/Docker 호출 없이 로그만 순서대로 재생한다.
-ai/.venv/bin/python -m ai analyze samples/todo --use-demo-cache --out out/cached-todo/
-ai/.venv/bin/python -m ai analyze samples/todo-scheduler --use-demo-cache --out out/cached-scheduler/
+ai/.venv/bin/python -m ai analyze samples/todo --env onprem --use-demo-cache --llm none --out out/cached-todo/
+ai/.venv/bin/python -m ai analyze samples/todo-scheduler --env aws --use-demo-cache --llm none --out out/cached-scheduler/
 
 # 실제 Bedrock + Docker로 두 캐시와 LLM fixture 재작성. 실제 추론 요금 발생.
 ai/.venv/bin/python ai/scripts/build_demo_cache.py
+
+# 다음 녹화 단계에서만 실행: 실제 Anthropic + Docker, 유료 호출.
+ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm anthropic --fixtures out/demo-recordings
+
+# 같은 녹화를 replay하여 새 Docker 검증. 새 모델 호출 없음.
+ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm replay --llm-provider anthropic --fixtures out/demo-recordings
 ```
 
 캐시는 `ai/demo-cache/<sample>/out`의 7종과 manifest에 있다. source/engine/설정/각 파일 해시가 맞아야 사용한다. 대상 env, commit, 명시한 source.repo, profile, 이미지 식별자, tfvars/비용 가정, 원본 비교 여부도 확인한다. 캐시가 없거나 달라지면 정상 실행으로 돌아가고 로그로 알린다. 실제 분석 실패 후 몰래 캐시로 성공을 대신하지 않는다. source.repo 미제공의 데모 캐시는 sample:// 이름을 사용하며 실제 GitHub 저장소/commit으로 해석하지 않는다.
+
+새 캐시 생성 설정은 todo=onprem, todo-scheduler=aws다. 위 고정 명령에 commit,
+source-repo, app-name 등을 추가하면 settings_key가 달라져 hit하지 않을 수 있다.
+이 캐시는 현재 웹(A)에 연결되지 않은 **CLI 전용 대비책**이다. 웹 실패를 자동으로
+대신하지 않는다. `--llm none` 명령은 miss에서도 모델 호출이 없으며,
+execution_source=demo_cache인지 확인해 사전 결과와 현재 규칙 분석을 구분한다.
+현재 저장된 캐시는 이전 엔진의 결과이며 이번 작업에서는 재생성하지 않는다.
+
+녹화 v2는 `<fixtures>/<provider>/<sample>/`의 manifest와 stage 파일로 구분한다.
+replay의 `--llm-provider`는 기대 제공자이며 origin·요청/응답 모델·파라미터·응답 해시·
+프롬프트/스키마/입력 해시가 맞지 않으면 PlaybackError로 중단한다. v2 요청 해시에는
+제공자와 요청 모델도 포함한다. 서버 fallback은 요청 모델과 실제 응답 모델을 구분해 검증한다.
+기존 v1 Bedrock 응답은 그대로 보존하고 고정된 legacy metadata로 검증한다.
+기존 AWS용 todo 녹화를 onprem 요청으로 바꾸거나 해시를 수정해서 재생하지 않는다.
+모델/파라미터를 바꿔 다시 녹화할 때는 새 fixtures 경로를 사용한다.
 
 모든 재생 로그에 `(사전 실행 결과)`를 붙이고 짧고 제한된 지연만 적용한다. 과거 로그의 단계 시간/trace 언급은 과거 실행을 가리키며, 공유 캐시에 개인 trace 파일은 넣지 않는다. 응답은 LLM fixture에서 확인한다. 현재 결과는 execution_source=demo_cache, 현재 gate.status=skipped, historical_status=passed, pr_eligible=false다. 캐시 비용은 historical=true와 external_calls=0이며 total/calls/stages는 과거 사용량이다. 추가 cache-provenance.json에 이전 시간·해시를 기록한다. 캐시 hit에서는 새 BuildContext를 반환하지 않는다.
 
@@ -310,6 +331,9 @@ ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm replay
 캐시 provenance의 llm_execution_source=llm_replay와 recorded_llm_usage를 표시한다.
 이 replay 모드로 생성한 cache cost는 과거의 재생 실행 사용량(새 AWS 토큰/비용 0)이고, recorded_llm_usage는 별도의 원래 Bedrock 과거 사용량이다.
 그 원래 비용 null을 0원으로 바꾸지 않는다. 캐시 복원 시 현재 gate는 skipped이고 과거 Docker passed만 표시한다.
+
+2026-10-11 시연 엔진의 후보 필드·동결·다음 녹화 절차는
+[demo-engine-freeze.md](deliverables/demo-engine-freeze.md)를 따른다.
 
 검토 결함/증거와 남은 계약은 [수정 요약](../docs/review-fix-summary.md),
 A/C의 실행 조건은 [배포 명세 계약](deliverables/deploy-spec-contract.md)을 참고한다.
