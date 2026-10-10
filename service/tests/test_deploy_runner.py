@@ -10,7 +10,7 @@ from app.db import AwsEnvironment, Base, DeployJob, Deployment, Project, User, W
 from app.deploy_runner import FLUSH_EVENTS, FLUSH_SECONDS, DeployRunner, LogSink
 from app.deploy_state import DeployStateError
 from app.deployments import LEASE_SECONDS, DeploymentError, claim, select_target
-from app.source import SourceError, SourceResult
+from app.source import GitHubCloneSource, LocalFolderSource, SourceError, SourceResult
 
 ROLE = "arn:aws:iam::223455088214:role/deploy-service-role"
 BUCKET = "anyship-tfstate-223455088214-ap-northeast-2-2b9b6060"
@@ -53,14 +53,23 @@ class ClosedExecutor(SyncExecutor):
 
 
 class FakeSource:
-    def __init__(self, error=None):
-        self.error, self.calls = error, []
+    """받은 인자를 기록하고, 받아 둔 임시 소스를 지운 횟수(cleanups)를 센다."""
 
-    def fetch(self, full_name):
-        self.calls.append(full_name)
+    def __init__(self, error=None):
+        self.error, self.calls, self.cleanups, self.stale_cleared = error, [], 0, 0
+
+    def clear_stale(self):
+        self.stale_cleared += 1
+
+    def fetch(self, full_name, branch="", token=None):
+        self.calls.append((full_name, branch, token))
         if self.error:
             raise self.error
-        return SourceResult(path=__import__("pathlib").Path("/srv/sources/todo"), commit_sha=SHA, spec={"app": "todo"})
+        return SourceResult(path=__import__("pathlib").Path("/srv/sources/todo"), commit_sha=SHA, spec={"app": "todo"},
+                            cleanup=self._cleanup)
+
+    def _cleanup(self):
+        self.cleanups += 1
 
 
 class FakeDeployer:
@@ -143,10 +152,10 @@ def submit_destroy(sessions, runner, request=None):
         return job.id, created
 
 
-def submit(sessions, runner, request=None, secrets=None):
+def submit(sessions, runner, request=None, secrets=None, token=None):
     with sessions() as session:
         project = session.get(Project, "p1")
-        job, created = runner.submit(session, project, request or uuid.uuid4(), secrets or {})
+        job, created = runner.submit(session, project, request or uuid.uuid4(), secrets or {}, token=token)
         return job.id, created
 
 
@@ -453,7 +462,8 @@ def settings_for(tmp_path, **override):
     (tmp_path / "terraform").mkdir(exist_ok=True)
     (tmp_path / "key").write_text("PRIVATE")
     (tmp_path / "key.pub").write_text("ssh-ed25519 AAAA deploy\n")
-    values = dict(deploy_source_dir=tmp_path / "sources", deploy_ssh_key=tmp_path / "key",
+    values = dict(deploy_source="github", deploy_workspace=tmp_path / "work", deploy_source_dir=tmp_path / "sources",
+                  deploy_ssh_key=tmp_path / "key",
                   deploy_terraform_dir=tmp_path / "terraform", deploy_plugin_cache=tmp_path / "cache",
                   deploy_base_domain="anyship.cloud", deploy_verify_tls=True, deploy_dns=True, deploy_service_ip="203.0.113.10",
                   deploy_acme_email="ops@example.com", database_url="sqlite://")
@@ -476,15 +486,26 @@ def test_dns_is_left_alone_when_it_is_switched_off(sessions, tmp_path):
 
 
 @pytest.mark.parametrize("override, message", [
-    ({"deploy_source_dir": "missing"}, "APP_DEPLOY_SOURCE_DIR"),
+    ({"deploy_source": "local", "deploy_source_dir": "missing"}, "APP_DEPLOY_SOURCE_DIR"),
     ({"deploy_ssh_key": "missing"}, "APP_DEPLOY_SSH_KEY"),
     ({"deploy_terraform_dir": "missing"}, "APP_DEPLOY_TERRAFORM_DIR")])
 def test_missing_paths_stop_the_server_at_startup_by_name(sessions, tmp_path, override, message):
     settings = settings_for(tmp_path)
     for key, value in override.items():
-        setattr(settings, key, tmp_path / value)
+        setattr(settings, key, value if key == "deploy_source" else tmp_path / value)
     with pytest.raises(RuntimeError, match=message):
         DeployRunner.from_settings(settings, sessions)
+
+
+def test_the_github_source_is_used_by_default_and_needs_no_source_folder(sessions, tmp_path):
+    settings = settings_for(tmp_path, deploy_source_dir=tmp_path / "does-not-exist")
+    runner = DeployRunner.from_settings(settings, sessions)
+    assert isinstance(runner.source, GitHubCloneSource) and runner.source._workspace == tmp_path / "work"
+
+
+def test_the_local_folder_source_is_used_only_when_asked_for(sessions, tmp_path):
+    runner = DeployRunner.from_settings(settings_for(tmp_path, deploy_source="local"), sessions)
+    assert isinstance(runner.source, LocalFolderSource)
 
 
 @pytest.mark.parametrize("content", [None, "not a key"])
@@ -648,3 +669,133 @@ def test_an_environment_that_stops_being_connected_before_the_thread_runs_fails_
     assert (row.status, row.stage) == ("failed", "environment") and deployer.destroy_calls == []
     assert json.loads(row.result_json)["error"]["code"] == "environment_not_connected"
     assert deployment(sessions).image_tag == SHA and deployment(sessions).active_job_id is None
+
+
+# --- GitHub에서 받은 소스(토큰과 임시 폴더) ---------------------------------------------------
+GITHUB_TOKEN = "gho_" + "t" * 30
+
+
+def test_the_source_is_fetched_for_the_projects_repository_and_branch_with_the_users_token(sessions, tmp_path, database_url):
+    source = FakeSource()
+    runner, _ = build(sessions, tmp_path, database_url, source=source)
+    submit(sessions, runner, token=GITHUB_TOKEN)
+    assert source.calls == [("o/todo", "main", GITHUB_TOKEN)]
+
+
+def test_the_users_token_never_reaches_the_deployer_the_database_or_the_job_record(sessions, tmp_path, database_url):
+    deployer = FakeDeployer()
+    runner, _ = build(sessions, tmp_path, database_url, deployer=deployer)
+    job_id, _ = submit(sessions, runner, token=GITHUB_TOKEN)
+    assert GITHUB_TOKEN not in repr(deployer.calls) and GITHUB_TOKEN not in everything_in_the_database(sessions)
+    assert job_row(sessions, job_id).status == "succeeded"
+
+
+@pytest.mark.parametrize("outcome", ["success", "failure", "exception"])
+def test_the_received_source_is_removed_after_the_job_however_it_ends(sessions, tmp_path, database_url, outcome):
+    source = FakeSource()
+    behaviours = {
+        "success": None,
+        "failure": lambda log, secrets: DeployResult(ok=False, error=AdapterError(code="docker_build_failed", message="x"),
+                                                     details={"stage": "build"}),
+        "exception": lambda log, secrets: (_ for _ in ()).throw(RuntimeError("boom")),
+    }
+    runner, _ = build(sessions, tmp_path, database_url, source=source, deployer=FakeDeployer(behaviours[outcome]))
+    submit(sessions, runner)
+    assert len(source.calls) == 1 and source.cleanups == 1
+
+
+def test_the_source_is_kept_while_the_job_is_queued_and_removed_when_the_thread_has_finished(sessions, tmp_path, database_url):
+    source, executor = FakeSource(), DeferredExecutor()
+    runner, _ = build(sessions, tmp_path, database_url, source=source, executor=executor)
+    submit(sessions, runner)
+    assert source.cleanups == 0  # 스레드가 쓸 때까지 지우지 않는다
+    executor.run_all()
+    assert source.cleanups == 1
+
+
+def test_a_failed_environment_step_still_removes_the_source(sessions, tmp_path, database_url):
+    source, executor = FakeSource(), DeferredExecutor()
+    runner, environment_id = build(sessions, tmp_path, database_url, source=source, executor=executor)
+    submit(sessions, runner)
+    with sessions() as session:
+        session.get(AwsEnvironment, environment_id).status = "FAILED"
+        session.commit()
+    executor.run_all()
+    assert source.cleanups == 1
+
+
+def test_a_job_interrupted_before_its_thread_starts_still_removes_the_source(sessions, tmp_path, database_url):
+    source, executor = FakeSource(), DeferredExecutor()
+    runner, _ = build(sessions, tmp_path, database_url, source=source, executor=executor)
+    submit(sessions, runner)
+    runner.close()
+    executor.run_all()
+    assert source.cleanups == 1
+
+
+def test_a_request_that_loses_the_race_for_the_lease_removes_the_source_it_fetched(sessions, tmp_path, database_url):
+    source, executor = FakeSource(), DeferredExecutor()
+    runner, _ = build(sessions, tmp_path, database_url, source=source, executor=executor)
+    submit(sessions, runner)
+    with sessions() as session, pytest.raises(DeploymentError):
+        runner.submit(session, session.get(Project, "p1"), uuid.uuid4(), {}, token=GITHUB_TOKEN)
+    assert len(source.calls) == 2 and source.cleanups == 1  # 두 번째 요청의 소스는 바로 지워졌고 첫 번째는 스레드가 끝나길 기다린다
+    executor.run_all()
+    assert source.cleanups == 2
+
+
+def test_a_shutdown_in_progress_removes_the_source_and_frees_the_project(sessions, tmp_path, database_url):
+    source = FakeSource()
+    runner, _ = build(sessions, tmp_path, database_url, source=source, executor=ClosedExecutor())
+    submit(sessions, runner)
+    assert source.cleanups == 1 and deployment(sessions).active_job_id is None
+
+
+def test_a_repeated_request_does_not_fetch_the_source_again(sessions, tmp_path, database_url):
+    source = FakeSource()
+    runner, _ = build(sessions, tmp_path, database_url, source=source)
+    request = uuid.uuid4()
+    first, created = submit(sessions, runner, request, token=GITHUB_TOKEN)
+    second, created_again = submit(sessions, runner, request, token=GITHUB_TOKEN)
+    assert (first == second, created, created_again) == (True, True, False)
+    assert len(source.calls) == 1 and source.cleanups == 1
+
+
+def test_a_source_error_leaves_nothing_to_clean_and_creates_no_job(sessions, tmp_path, database_url):
+    source = FakeSource(SourceError("source_fetch_failed", "GitHub에서 소스를 받지 못했습니다."))
+    runner, _ = build(sessions, tmp_path, database_url, source=source)
+    with sessions() as session, pytest.raises(SourceError) as caught:
+        runner.submit(session, session.get(Project, "p1"), uuid.uuid4(), {}, token=GITHUB_TOKEN)
+    assert caught.value.code == "source_fetch_failed" and GITHUB_TOKEN not in caught.value.message
+    assert source.cleanups == 0 and deployment(sessions).active_job_id is None
+
+
+def test_starting_clears_temporary_sources_left_by_a_crashed_process(sessions, tmp_path, database_url):
+    source = FakeSource()
+    runner, _ = build(sessions, tmp_path, database_url, source=source)
+    assert source.stale_cleared == 1  # build()가 start()를 부른다
+    runner.close()
+    runner.start()
+    assert source.stale_cleared == 2
+
+
+def test_a_destroy_never_fetches_a_source(sessions, tmp_path, database_url):
+    source = FakeSource()
+    runner, _ = build(sessions, tmp_path, database_url, source=source)
+    submit(sessions, runner)
+    calls_before = len(source.calls)
+    submit_destroy(sessions, runner)
+    assert len(source.calls) == calls_before
+
+
+def test_the_second_of_two_simultaneous_identical_requests_removes_the_source_it_fetched(sessions, tmp_path, database_url, monkeypatch):
+    # 두 요청이 거의 동시에 들어와 둘 다 "아직 같은 요청이 없다"는 검사를 통과한 상황을 만든다. 선점에서야 중복이 드러난다.
+    source = FakeSource()
+    runner, _ = build(sessions, tmp_path, database_url, source=source)
+    request = uuid.uuid4()
+    first, created = submit(sessions, runner, request)
+    assert created and source.cleanups == 1
+    monkeypatch.setattr("app.deploy_runner.find_request", lambda *args, **kwargs: None)
+    second, created_again = submit(sessions, runner, request, token=GITHUB_TOKEN)
+    assert (first == second, created_again) == (True, False)
+    assert len(source.calls) == 2 and source.cleanups == 2  # 늦게 온 쪽이 받은 소스도 남지 않는다

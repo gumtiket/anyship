@@ -421,3 +421,41 @@ def test_a_failed_removal_keeps_the_deployment_and_shows_why(web):
     job = web.client.get(f"{web.endpoint}/jobs/{destroy(web).json()['id']}").json()
     assert (job["status"], job["stage"], job["result"]["error"]["code"]) == ("failed", "destroy", "destroy_failed")
     assert web.client.get(web.endpoint).json()["target"]["deployed"] is True
+
+
+# --- GitHub 토큰 ---------------------------------------------------------------------------
+def test_the_users_login_token_reaches_the_source_fetch_and_nothing_else(web):
+    ready(web)
+    response = deploy(web, secrets={"API_KEY": USER_SECRET})
+    (full_name, branch, token), = web.runner.source.calls
+    assert (full_name, branch) == ("demo-workspace/todo-api", "main")  # 연결한 프로젝트의 저장소와 브랜치
+    assert isinstance(token, str) and token  # 로그인 세션에 암호화해 둔 사용자 토큰을 풀어서 넘겼다
+    assert token not in response.text and token not in web.client.get(web.endpoint + "/jobs").text
+    assert token not in database_text(web) and token not in repr(web.runner.deployer.calls)
+
+
+def test_a_session_whose_token_cannot_be_read_is_asked_to_log_in_again_and_fetches_nothing(web):
+    ready(web)
+    with web.app.state.sessions() as session:
+        from app.db import LoginSession
+        for row in session.query(LoginSession).all():
+            row.token_cipher = "not-a-valid-token"
+        session.commit()
+    refused = deploy(web)
+    assert refused.status_code == 401 and web.runner.source.calls == []
+
+
+def test_a_removal_does_not_need_or_use_the_github_token(web):
+    ready(web)
+    deploy(web)
+    fetches = len(web.runner.source.calls)
+    assert destroy(web).status_code == 202 and len(web.runner.source.calls) == fetches
+
+
+def test_a_source_that_cannot_be_fetched_is_reported_at_once_without_the_token(web):
+    ready(web)
+    web.runner.source.error = SourceError("source_fetch_failed", "GitHub에서 소스를 받지 못했습니다.")
+    refused = deploy(web)
+    assert (refused.status_code, refused.json()["detail"]["code"]) == (409, "source_fetch_failed")
+    token = web.runner.source.calls[0][2]
+    assert token not in refused.text and web.client.get(web.endpoint + "/jobs").json() == []

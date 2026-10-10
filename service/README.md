@@ -143,9 +143,66 @@ AWS 인증과 AssumeRole은 실제 AWS 어댑터 실행 환경의 책임입니�
 
 참고: [CloudFormation quick-create](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html), [타사 역할 접근과 External ID 검증](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html), [Boto3 STS](https://docs.aws.amazon.com/boto3/latest/reference/services/sts/client/assume_role.html).
 
-## 실제 배포 데이터 모델 (준비 중)
+## 실제 배포
 
-실제 배포(`anyship_adapters.Deployer`)를 서비스에 붙이기 위한 데이터 모델입니다. **아직 API와 화면, 실행기는 없고**(후속 이슈), 위 Mock 배포와 별개입니다. Mock 테이블과 코드는 건드리지 않으며 실제 어댑터로 자동 대체하지도 않습니다.
+`APP_DEPLOYMENT_MODE=real`이면 사용자가 연결한 저장소를 **사용자의 AWS 계정**에 배포합니다(`anyship_adapters.Deployer`). 위 Mock 배포와는 코드, 테이블, API가 모두 별개이고, 서로 자동으로 대체하지 않습니다. 기본값은 `unavailable`이라 켜지 않으면 동작이 바뀌지 않습니다.
+
+### 흐름
+
+```
+저장소 연결 → AWS 환경 연결(CONNECTED) → 환경 선택 → 배포 → (처음이면 공용 기반 생성) → 앱 주소
+```
+
+한 번의 배포는 `소스 받기 → 이미지 빌드 → 공용 기반 확인(+DNS) → 연결 확인 → 배포 → 정리`입니다. 소스 받기는 요청 안에서(빠르게 실패를 알리려고), 나머지는 백그라운드 스레드에서 합니다. 진행 로그는 단계별로 DB에 쌓이고 화면이 1~2초마다 읽습니다. 공용 기반(호스트, RDS)을 처음 만들 때만 약 20분이 걸립니다.
+
+### 설정 (`.env.github.local`, 값은 `.env.web.example` 참고)
+
+| 변수 | 설명 |
+|---|---|
+| `APP_DEPLOYMENT_MODE=real` | 필수. 빠진 값은 서버가 뜰 때 **변수 이름만** 알리고 멈춥니다 |
+| `APP_DEPLOY_SOURCE` | `github`(기본): 연결한 저장소의 브랜치를 사용자 토큰으로 GitHub에서 받음. `local`: 서버 폴더에 받아 둔 소스(시험용) |
+| `APP_DEPLOY_SOURCE_DIR` | `local`일 때만 필수. 저장소 이름과 같은 하위 폴더를 배포 |
+| `APP_DEPLOY_WORKSPACE` | `github`일 때 받은 소스를 잠시 두는 곳(기본 `service/workspaces/deploy-src`) |
+| `APP_DEPLOY_SSH_KEY`, `APP_DEPLOY_SERVICE_IP`, `APP_DEPLOY_ACME_EMAIL`, `APP_DEPLOY_BASE_DOMAIN` | 필수 |
+| `APP_DEPLOY_DNS` | `on`(기본): 앱 주소의 DNS 레코드(`*.<환경ID>.aws.<도메인>`)를 서비스가 Route 53에서 맞춤. `off`: 수동 관리 |
+| `APP_DEPLOY_VERIFY_TLS` | 기본 `true`. Let's Encrypt staging 인증서를 시험할 때만 `false` |
+| `APP_DEPLOY_TERRAFORM_DIR`, `APP_DEPLOY_PLUGIN_CACHE` | 선택 |
+
+### 소스를 GitHub에서 받기
+
+- 서비스에 저장된 사용자의 GitHub 토큰으로 연결한 브랜치를 **얕게 복제**(`--depth 1`)합니다. 토큰은 `git`의 인증 헤더로만 넘기고 주소나 로그, DB, 응답에 남기지 않으며, 스레드로도 넘기지 않습니다(소스는 요청 안에서 받아 두고 스레드에는 폴더만 넘깁니다).
+- 이미지 태그는 받은 커밋의 앞 12자리입니다. 저장소 루트에 `Dockerfile`과 `deploy-spec.yaml`이 **있어야** 합니다(AI 연결 전의 전제). 서브모듈과 Git LFS는 받지 않습니다.
+- 받은 임시 폴더는 배포가 끝나거나 실패하거나 요청이 중복이어도 **반드시 지웁니다**. 서버가 비정상으로 멈춰 남은 것은 다음 시작 때 지웁니다.
+- 저장소 이름과 브랜치 이름은 형식을 엄격히 검사하고(옵션 주입, `..`, 줄바꿈 거절), 오류에는 git의 출력을 싣지 않습니다.
+
+### API (`/api/projects/{id}/deployment`)
+
+| 요청 | 설명 |
+|---|---|
+| `GET` | 현재 대상과 상태, 선택 가능한 환경(연결이 확인된 것만 `available`) |
+| `PUT` | `{environment_id, set_name}` 저장. 한 번도 배포한 적이 없고 진행 중인 작업이 없을 때만 바꿀 수 있음 |
+| `POST /jobs` | `{request_id, secrets}`로 배포. 새 작업은 `202`, 같은 `request_id`는 `200`으로 기존 작업을 돌려줌 |
+| `POST /jobs` | `{request_id, action: "destroy"}`로 **배포 제거**. 비밀을 받지 않음 |
+| `GET /jobs`, `GET /jobs/{id}` | 이력과 단계별 로그 |
+
+- 사용자 비밀(`secrets`)은 요청 본문으로만 받고 DB, 로그, 응답 어디에도 남기지 않습니다. 이 경로의 검증 오류(422)는 입력값을 싣지 않는 고정 문구입니다.
+- 실패한 작업은 `stage`로 단계를 알립니다: `source`(요청 안에서 즉시 오류), `spec`, `build`, `foundation`(DNS 포함), `check`, `deploy`, `destroy`, `environment`, `runner`.
+- 같은 프로젝트에서는 한 번에 한 작업만 합니다(선점 유효 30분, 실행 중 연장). 서버를 다시 시작하면 진행 중이던 작업은 `interrupted`가 됩니다. 20분짜리 `terraform apply` 도중에 서버가 멈추면 Terraform 잠금이 남을 수 있고, 다음 배포가 `terraform_locked`로 실패하면 잠금을 풀어야 합니다.
+
+### 배포 제거
+
+앱의 컨테이너와 볼륨, 서버의 앱 폴더만 지웁니다. **앱 DB와 공용 기반(호스트, RDS), DNS 레코드는 남아** 요금이 계속 나옵니다. 지운 뒤에는 "아직 배포하지 않음"으로 돌아와 환경을 다시 고르거나 다시 배포할 수 있습니다. 공용 기반을 지우는 기능은 아직 없습니다.
+
+### 시험
+
+```bash
+python -m pytest tests/test_source.py tests/test_deploy_runner.py tests/test_deploy_api.py tests/test_deployments_state.py   # AWS와 GitHub를 부르지 않는다
+python -m tests.browser_fixture --deploy   # 가짜 배포자로 화면을 확인하는 도우미(http://127.0.0.1:8001/_test_only/login)
+```
+
+서버에서 진짜 AWS로 확인하려면 `scripts/seed_test_environment.py`와 `scripts/smoke_deploy_api.py`(로컬 폴더 소스 고정), 또는 웹 화면에서 직접 배포합니다.
+
+### 데이터 모델
 
 `python -m alembic upgrade head`로 `0008`을 적용하면 다음이 추가됩니다. 기존 데이터는 그대로이고 새 컬럼은 비어 있습니다.
 

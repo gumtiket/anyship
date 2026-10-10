@@ -53,7 +53,7 @@ class JobInput(BaseModel):
         return self
 
 
-def router(settings, runner, db, current, mutation):
+def router(settings, runner, db, current, mutation, access_token=None):
     routes = APIRouter(prefix="/api/projects/{project_id}/deployment", tags=["Deployments"])
 
     def project(session, login, project_id):
@@ -119,7 +119,9 @@ def router(settings, runner, db, current, mutation):
             if body.action == "destroy":
                 created_job, created = runner.submit_destroy(session, row, body.request_id)
             else:
-                created_job, created = runner.submit(session, row, body.request_id, body.secrets)
+                # 사용자의 GitHub 토큰은 요청 안에서 소스를 받을 때만 쓰이고, 응답, 로그, DB에는 남지 않는다.
+                token = access_token(login) if access_token else None
+                created_job, created = runner.submit(session, row, body.request_id, body.secrets, token=token)
         except DeploymentError as error:
             fail(error.status, error.code, error.message)
         except (DeployStateError, SourceError) as error:

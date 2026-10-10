@@ -26,8 +26,8 @@ from anyship_adapters.terraform_runner import TerraformRunner
 
 from .db import AwsEnvironment, DeployJob, Deployment
 from .deploy_state import DeployStateError, adapter_environment, ensure_state_bucket, save_foundation
-from .deployments import ACTIVE, DeploymentError, append_logs, claim, extend_lease, finish, interrupt_all
-from .source import SourceError, SourceProvider
+from .deployments import ACTIVE, DeploymentError, append_logs, claim, extend_lease, find_request, finish, interrupt_all
+from .source import GitHubCloneSource, LocalFolderSource, SourceError, SourceProvider
 
 FLUSH_EVENTS, FLUSH_SECONDS = 20, 2.0
 
@@ -102,10 +102,11 @@ class DeployRunner:
 
     @classmethod
     def from_settings(cls, settings, sessions):
-        from .source import LocalFolderSource
-        for name, path, check in (("APP_DEPLOY_SOURCE_DIR", settings.deploy_source_dir, Path.is_dir),
-                                  ("APP_DEPLOY_SSH_KEY", settings.deploy_ssh_key, Path.is_file),
-                                  ("APP_DEPLOY_TERRAFORM_DIR", settings.deploy_terraform_dir, Path.is_dir)):
+        checks = [("APP_DEPLOY_SSH_KEY", settings.deploy_ssh_key, Path.is_file),
+                  ("APP_DEPLOY_TERRAFORM_DIR", settings.deploy_terraform_dir, Path.is_dir)]
+        if settings.deploy_source == "local":
+            checks.insert(0, ("APP_DEPLOY_SOURCE_DIR", settings.deploy_source_dir, Path.is_dir))
+        for name, path, check in checks:
             if not check(Path(path)):
                 raise RuntimeError(f"{name} does not point to an existing {'folder' if check is Path.is_dir else 'file'}.")
         adapter = AwsAlwaysOnAdapter(settings.deploy_ssh_key, base_domain=settings.deploy_base_domain,
@@ -117,12 +118,16 @@ class DeployRunner:
         dns = WildcardRecords(scope="aws", base_domain=settings.deploy_base_domain) if settings.deploy_dns else None
         deployer = Deployer({"aws-always-on": adapter}, ImageBuilder(timeout=900), runner=runner, foundation=foundation,
                             dns=dns)
-        return cls(settings, sessions, source=LocalFolderSource(settings.deploy_source_dir), deployer=deployer)
+        source = (LocalFolderSource(settings.deploy_source_dir) if settings.deploy_source == "local"
+                  else GitHubCloneSource(settings.deploy_workspace))
+        return cls(settings, sessions, source=source, deployer=deployer)
 
     def start(self) -> None:
         self.lock_file = _lock(self.lock_dir, self.settings.database_url)
         try:
             self.runtime_id = str(uuid.uuid4())
+            if hasattr(self.source, "clear_stale"):
+                self.source.clear_stale()  # 비정상 종료로 남은 임시 소스를 지운다(쓰는 중인 것은 없다)
             with self.sessions() as session:
                 interrupt_all(session, "worker_restarted", "서버가 재시작되어 작업이 중단됐습니다. 새 요청으로 다시 시도해 주세요.")
             self.executor = self._executor_override or ThreadPoolExecutor(max_workers=2, thread_name_prefix="anyship-deploy")
@@ -141,18 +146,35 @@ class DeployRunner:
             self.lock_file.close()
             self.lock_file = None
 
-    def submit(self, session, project, request_id, secrets: dict):
-        """요청 안에서: 환경과 소스를 확인하고 작업을 선점해 스레드에 넘긴다. (작업, 새로 만들었는지)."""
+    def submit(self, session, project, request_id, secrets: dict, token: str | None = None):
+        """요청 안에서: 환경과 소스를 확인하고 작업을 선점해 스레드에 넘긴다. (작업, 새로 만들었는지).
+
+        `token`은 사용자의 GitHub 토큰이다. **이 요청 안에서 소스를 받을 때만** 쓰고 스레드로는 넘기지 않는다. 받아 둔 소스(임시 폴더)는
+        작업이 끝났거나 작업을 만들지 못했을 때 반드시 지운다."""
+        if previous := find_request(session, project.id, request_id, "deploy"):
+            return previous, False  # 같은 요청의 재전송은 소스를 다시 받지 않는다
         target = session.get(Deployment, project.id)
         environment = session.get(AwsEnvironment, target.aws_environment_id) if target else None
         if environment is not None:
             adapter_environment(environment)  # 연결이 확인되지 않은 환경은 여기서 거절한다
-        fetched = self.source.fetch(project.full_name) if environment is not None else None
-        job, created = claim(session, project.id, request_id, self.runtime_id,
-                             image_tag=fetched.commit_sha if fetched else "")
+        fetched = self.source.fetch(project.full_name, project.branch, token) if environment is not None else None
+        try:
+            job, created = claim(session, project.id, request_id, self.runtime_id,
+                                 image_tag=fetched.commit_sha if fetched else "")
+        except BaseException:
+            self._release(fetched)
+            raise
         if created:
-            self._start(session, job, self._run, job.id, environment.id, fetched, dict(secrets))
+            self._start(session, job, self._run, job.id, environment.id, fetched, dict(secrets), cleanup=fetched)
+        else:
+            self._release(fetched)  # 동시에 들어온 같은 요청이 먼저 만들었다
         return job, created
+
+    @staticmethod
+    def _release(fetched) -> None:
+        """받아 둔 임시 소스를 지운다(없거나 지울 것이 없으면 아무것도 하지 않는다)."""
+        if fetched is not None and fetched.cleanup is not None:
+            fetched.cleanup()
 
     def submit_destroy(self, session, project, request_id):
         """요청 안에서: 배포된 앱을 지우는 작업을 선점해 스레드에 넘긴다. (작업, 새로 만들었는지).
@@ -168,10 +190,11 @@ class DeployRunner:
             self._start(session, job, self._run_destroy, job.id, environment.id, target.app_name)
         return job, created
 
-    def _start(self, session, job, function, *args) -> None:
+    def _start(self, session, job, function, *args, cleanup=None) -> None:
         try:
             self.executor.submit(function, *args)
         except RuntimeError:  # 서버를 멈추는 중이다
+            self._release(cleanup)
             finish(session, job.id, ok=False, stage="runner", result=self._failure(
                 "worker_stopping", "서버 종료 중입니다. 다시 시도해 주세요."))
             session.refresh(job)
@@ -181,6 +204,12 @@ class DeployRunner:
         return {"ok": False, "error": {"code": code, "message": message, "hint": hint, "retryable": retryable}}
 
     def _run(self, job_id: str, environment_id: str, fetched, secrets: dict) -> None:
+        try:
+            self._run_deploy(job_id, environment_id, fetched, secrets)
+        finally:
+            self._release(fetched)  # 어떤 경우에도 받아 둔 임시 소스를 남기지 않는다
+
+    def _run_deploy(self, job_id: str, environment_id: str, fetched, secrets: dict) -> None:
         known = dict(secrets)
         sink = LogSink(lambda events: self._store(job_id, events), known)
         try:

@@ -64,6 +64,16 @@ def select_target(session, project_id: str, environment: AwsEnvironment, set_nam
     return target
 
 
+def find_request(session, project_id: str, request_id, action: str):
+    """이미 같은 요청 ID로 만든 작업이 있으면 돌려준다(없으면 None). 다른 동작에 재사용한 요청 ID는 거절한다.
+    소스를 받는 것 같은 비싼 일을 하기 전에 중복 요청을 거르려고 따로 둔다."""
+    previous = session.scalar(select(DeployJob).where(DeployJob.project_id == project_id,
+                                                      DeployJob.request_id == str(request_id)))
+    if previous is not None and previous.action != action:
+        raise _error("request_conflict", "같은 요청 식별자에 다른 작업을 보낼 수 없습니다.")
+    return previous
+
+
 def claim(session, project_id: str, request_id, runtime_id: str, *, action: str = "deploy", image_tag: str = "",
           now: int | None = None):
     """배포 또는 삭제 작업을 만들고 선점한다. (작업, 새로 만들었는지). 같은 요청 ID가 다시 오면 기존 작업을 돌려준다.
@@ -71,11 +81,10 @@ def claim(session, project_id: str, request_id, runtime_id: str, *, action: str 
     삭제(`destroy`)는 배포된 적이 있을 때만 할 수 있다. 작업 기록의 image_tag에는 지우는 버전이 남는다."""
     if action not in ACTIONS:
         raise ValueError("action must be one of " + ", ".join(ACTIONS))
+    created_ms = int(time.time() * 1000) if now is None else now * 1000  # 같은 초에 만든 작업도 순서가 갈리도록 밀리초로 기록한다
     now = int(time.time()) if now is None else now
     existing = select(DeployJob).where(DeployJob.project_id == project_id, DeployJob.request_id == str(request_id))
-    if previous := session.scalar(existing):
-        if previous.action != action:
-            raise _error("request_conflict", "같은 요청 식별자에 다른 작업을 보낼 수 없습니다.")
+    if previous := find_request(session, project_id, request_id, action):
         return previous, False
     target = session.get(Deployment, project_id)
     if target is None:
@@ -96,7 +105,7 @@ def claim(session, project_id: str, request_id, runtime_id: str, *, action: str 
         session.rollback()
         raise _error("deploy_job_running", "이미 배포 작업을 처리하고 있습니다.")
     job = DeployJob(id=identifier, project_id=project_id, request_id=str(request_id), runtime_id=runtime_id,
-                    action=action, set_name=target.set_name, image_tag=image_tag, created_at=now * 1000)
+                    action=action, set_name=target.set_name, image_tag=image_tag, created_at=created_ms)
     session.add(job)
     try:
         session.commit()
