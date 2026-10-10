@@ -46,7 +46,8 @@ p{line-height:1.8;color:#62666c}
 .login-foot{display:flex;gap:7px;justify-content:center;align-items:center;color:#73777e;font-size:11px;margin-top:20px}
 .landing-footer{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;padding:22px 6%;border-top:1px solid #e4e5e7;font-size:10px;letter-spacing:.7px;color:#73777e}
 .shell{display:grid;grid-template-columns:225px minmax(0,1fr);min-height:100vh}
-.sidebar{background:#f0f1f2;border-right:1px solid #e4e5e7;padding:29px 19px;display:flex;flex-direction:column}
+.sidebar{background:#f0f1f2;border-right:1px solid #e4e5e7;padding:29px 19px;display:flex;flex-direction:column;position:sticky;top:0;align-self:start;height:100vh;height:100dvh}
+.sidebar-content{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;margin:-6px;padding:6px}
 .workspace-avatar{display:flex;gap:10px;align-items:center;margin:38px 0 30px;padding:0 7px;min-width:0}
 .workspace-avatar>span,.avatar{display:grid;place-items:center;border-radius:50%;background:#e4e5e7;color:#62666c;width:33px;height:33px;font-size:12px;flex-shrink:0}
 .workspace-avatar strong{font-size:12px;font-weight:600}
@@ -56,7 +57,7 @@ p{line-height:1.8;color:#62666c}
 .sidebar nav button{display:flex;gap:11px;align-items:center;padding:12px 13px;background:none;border:0;border-radius:7px;text-align:left;color:#62666c;font-size:12px}
 .sidebar nav button.active{background:#e2e3e5;color:#383b40;font-weight:600}
 .count{margin-left:auto;font-size:10px;background:#d0d2d5;border-radius:4px;padding:2px 6px}
-.sidebar-foot{margin-top:auto;padding:38px 10px 0}
+.sidebar-foot{margin-top:auto;padding:38px 10px 0;flex-shrink:0}
 .local-status{display:flex;align-items:center;gap:6px;color:#62666c;font-size:10px}
 .logout{display:flex;gap:8px;align-items:center;color:#62666c;background:transparent;border:0;padding:18px 0 0;font-size:11px}
 .main-area{display:flex;flex-direction:column;min-width:0}
@@ -161,7 +162,8 @@ input:focus,select:focus{outline:2px solid #73777e;outline-offset:1px}
 .landing-footer{padding:20px 6%}
 .landing-footer span{display:none}
 .shell{grid-template-columns:1fr}
-.sidebar{padding:16px 20px;border-right:0;border-bottom:1px solid #e4e5e7;display:flex;flex-direction:row;align-items:center;gap:16px;flex-wrap:wrap}
+.sidebar{padding:16px 20px;border-right:0;border-bottom:1px solid #e4e5e7;display:flex;flex-direction:row;align-items:center;gap:16px;flex-wrap:wrap;position:static;height:auto}
+.sidebar-content{display:contents}
 .sidebar .brand{font-size:16px}
 .sidebar .brand>span:first-child{width:27px;height:27px}
 .workspace-avatar,.nav-label,.local-status{display:none}

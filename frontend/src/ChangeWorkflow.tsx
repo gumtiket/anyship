@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check, ExternalLink, FileCode2, GitPullRequest, LoaderCircle, RefreshCw, Sparkles } from 'lucide-react';
 import { AnalysisWorkflow } from './AnalysisWorkflow';
+import { FileDiffViewer } from './FileDiffViewer';
 
 type Change = {
   id: string; status: string; file: string; title: string; content: string; diff: string;
@@ -69,7 +70,7 @@ function PlaceholderWorkflow({ projectId, csrf, aiMode, request, onError }: Prop
     <div aria-live="polite">{(loading || waiting) && <p className="workflow-busy"><LoaderCircle size={16} className="spin"/> {loading ? '작업을 불러오는 중입니다.' : '요청을 처리하고 있습니다. 새로고침해도 진행 기록은 유지됩니다.'}</p>}</div>
     {!loading && !change && <button className="primary" disabled={waiting || !enabled} onClick={() => action('/analysis')}><Sparkles size={16}/> 분석 요청 · 임시 모드</button>}
     {change && !prepared && <div className="change-item"><label className="review-check"><input type="checkbox" checked={selected} onChange={e => setSelected(e.target.checked)} disabled={waiting || !enabled}/><span><strong>AI 분석 모듈 미연결 안내 파일 추가</strong><small>{change.file} · 안내 주석만 포함</small></span></label><pre>{change.content}</pre><button className="primary" disabled={waiting || !selected || !enabled} onClick={() => action('/changes/apply')}><FileCode2 size={16}/> 선택한 수정 실행</button></div>}
-    {change && prepared && <><div className="workflow-verification"><Check size={15}/> 변경 내용 저장 · Python 문법 확인 완료<span>프로젝트 빌드·테스트는 실행하지 않았습니다.</span></div><p className="small quiet">기준 커밋 <code>{change.base_sha.slice(0, 12)}</code> · 작업 브랜치 <code>{change.branch}</code></p><pre className="change-diff" aria-label="코드 변경 내용">{change.diff}</pre>
+    {change && prepared && <><div className="workflow-verification"><Check size={15}/> 변경 내용 저장 · Python 문법 확인 완료<span>프로젝트 빌드·테스트는 실행하지 않았습니다.</span></div><p className="small quiet">기준 커밋 <code>{change.base_sha.slice(0, 12)}</code> · 작업 브랜치 <code>{change.branch}</code></p><FileDiffViewer key={`${change.id}:${change.review_hash}`} diff={change.diff}/>
       {!completed && <><label className="review-check"><input type="checkbox" checked={reviewed} onChange={e => setReviewed(e.target.checked)} disabled={waiting || !enabled}/><span>변경 내용을 확인했습니다. 실제 GitHub 저장소에 브랜치·커밋과 Draft PR을 생성합니다.</span></label><button className="primary" disabled={waiting || !reviewed || !enabled} onClick={() => action('/changes/pr', { review_hash: change.review_hash })}><GitPullRequest size={16}/> GitHub Draft PR 생성</button></>}
     </>}
     {change && completed && <div className="published-pr" role="status"><div><GitPullRequest size={20}/><h3>GitHub PR #{change.pr_number} 생성 완료</h3></div><p>{change.title}</p><p className="small">커밋 <code>{change.commit_sha.slice(0, 12)}</code> · Draft PR로 생성했습니다.</p><a className="primary" href={change.pr_url} target="_blank" rel="noreferrer">GitHub에서 PR 보기 <ExternalLink size={16}/></a></div>}
