@@ -132,8 +132,8 @@ def test_fake_gate_sequence_flags_and_cleanup(tmp_path, monkeypatch):
         "network",
         "postgres",
         "postgres_ready",
-        "migrate",
         "app_start",
+        "migrate",
         "healthcheck",
         "postgres_crud",
     ]
@@ -168,6 +168,10 @@ def test_each_failure_is_reported_and_resources_are_cleaned(tmp_path, failure):
     )
     assert logs[-1][0] == Stage.FAILED
     assert report.status == "failed" and report.transformed.status == "failed"
+    if failure == "migrate":
+        assert report.transformed.steps[-1].name == "migrate"
+        assert not any(step.name == "healthcheck" for step in report.transformed.steps)
+        assert any(action == "remove" and name.endswith("-migrate") for action, name in fake.events)
     assert not fake.networks and not fake.containers and not fake.images
     result.build_context.cleanup()
 

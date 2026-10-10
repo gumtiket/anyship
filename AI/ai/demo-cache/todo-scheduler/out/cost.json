@@ -2,54 +2,54 @@
   "calls": [
     {
       "stage": "diagnose",
-      "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-      "input_tokens": 3823,
-      "output_tokens": 1290,
-      "cost_usd": null,
-      "latency_s": 8.588625834032428
+      "model_id": "replay:global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cost_usd": 0.0,
+      "latency_s": 0.0
     },
     {
       "stage": "recommend",
-      "model_id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-      "input_tokens": 496,
-      "output_tokens": 140,
-      "cost_usd": null,
-      "latency_s": 1.4884606249979697
+      "model_id": "replay:global.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cost_usd": 0.0,
+      "latency_s": 0.0
     }
   ],
   "stages": {
     "diagnose": {
       "calls": 1,
-      "input_tokens": 3823,
-      "output_tokens": 1290,
-      "cost_usd": null,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cost_usd": 0.0,
       "known_cost_usd": 0.0,
-      "pricing_complete": false,
+      "pricing_complete": true,
       "unobserved_requests": 0,
       "usage_complete": true
     },
     "recommend": {
       "calls": 1,
-      "input_tokens": 496,
-      "output_tokens": 140,
-      "cost_usd": null,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cost_usd": 0.0,
       "known_cost_usd": 0.0,
-      "pricing_complete": false,
+      "pricing_complete": true,
       "unobserved_requests": 0,
       "usage_complete": true
     }
   },
   "total": {
     "calls": 2,
-    "input_tokens": 4319,
-    "output_tokens": 1430,
-    "cost_usd": null,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "cost_usd": 0.0,
     "known_cost_usd": 0.0,
-    "pricing_complete": false,
+    "pricing_complete": true,
     "unobserved_requests": 0,
     "usage_complete": true
   },
-  "execution_source": "current_run",
+  "execution_source": "llm_replay",
   "historical": false,
-  "external_calls": null
+  "external_calls": 0
 }

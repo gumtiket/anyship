@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Literal
@@ -10,14 +11,21 @@ from typing import Literal
 from pydantic import Field
 
 from ai.detectors import RepoView
+from ai.llm.anthropic import MODELS, AnthropicClient
 from ai.llm.base import LLMResult, Tier, ValidatingClient
+from ai.llm.bedrock import BedrockClient
 from ai.llm.cost import CostTracker, ModelPricing
+from ai.llm.fake import FakeLLMClient
 from ai.models import OutputModel
 from ai.security import SourceMasker
 from ai.transform.service import identify_sample
 
 STAGES = {"diagnose", "transform", "dockerfile", "spec", "recommend", "repair"}
 DEFAULT_FIXTURES = Path(__file__).resolve().parents[3] / "tests/fixtures/llm"
+Provider = Literal["bedrock", "anthropic", "fake"]
+ORIGINS = {"bedrock": "BedrockClient", "anthropic": "AnthropicClient", "fake": "FakeLLMClient"}
+LEGACY_MODELS = {"fast": "global.anthropic.claude-haiku-4-5-20251001-v1:0"}
+LEGACY_PARAMETERS = {"fast": {"inferenceConfig": {"maxTokens": 4096, "temperature": 0}}}
 
 
 class PlaybackError(Exception):
@@ -74,15 +82,113 @@ class Entry(OutputModel):
     prompt_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     response_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     response: dict
+    request_parameters: dict | None = None
 
 
 class Fixture(OutputModel):
-    format_version: Literal[1] = 1
+    format_version: Literal[1, 2] = 2
     sample: Literal["todo", "todo-scheduler"]
     stage: str
     origin: str
     parameters: dict
     entries: list[Entry] = Field(min_length=1, max_length=50)
+
+
+class RecordingManifest(OutputModel):
+    format_version: Literal[2] = 2
+    sample: Literal["todo", "todo-scheduler"]
+    provider: Provider
+    origin: str
+    models: dict[Tier, str]
+    parameters: dict[Tier, dict]
+    legacy: bool = False
+
+
+def _read_json(path: Path) -> str:
+    if (
+        path.is_symlink()
+        or any(p.is_symlink() for p in path.parents)
+        or path.stat().st_size > 524288
+    ):
+        raise PlaybackError("fixture_file_invalid")
+    text = path.read_text(encoding="utf-8")
+    assert_public(text)
+    return text
+
+
+def _provider(backend: ValidatingClient) -> Provider:
+    for name, kind in (
+        ("bedrock", BedrockClient),
+        ("anthropic", AnthropicClient),
+        ("fake", FakeLLMClient),
+    ):
+        if isinstance(backend, kind):
+            return name
+    raise PlaybackError("recording_provider_unknown")
+
+
+def _model_matches(provider: Provider, model: str, tier: Tier) -> bool:
+    if provider == "anthropic":
+        return model in MODELS
+    if provider == "fake":
+        return model == f"fake-{tier}"
+    return model.startswith(
+        (
+            "global.",
+            "us.",
+            "eu.",
+            "apac.",
+            "anthropic.",
+            "amazon.",
+            "meta.",
+            "mistral.",
+            "cohere.",
+            "ai21.",
+            "deepseek.",
+            "openai.",
+        )
+    )
+
+
+def _validate_manifest(manifest: RecordingManifest, sample: str, provider: Provider) -> None:
+    if (
+        manifest.sample != sample
+        or manifest.provider != provider
+        or manifest.origin != ORIGINS[provider]
+    ):
+        raise PlaybackError("fixture_provider_or_identity_mismatch")
+    if not manifest.models or set(manifest.models) != set(manifest.parameters):
+        raise PlaybackError("fixture_parameters_mismatch")
+    if manifest.legacy and provider != "bedrock":
+        raise PlaybackError("fixture_legacy_provider_mismatch")
+    if manifest.legacy and manifest.models != LEGACY_MODELS:
+        raise PlaybackError("fixture_model_mismatch")
+    if manifest.legacy and manifest.parameters != LEGACY_PARAMETERS:
+        raise PlaybackError("fixture_parameters_mismatch")
+    for tier, model in manifest.models.items():
+        if not _model_matches(provider, model, tier):
+            raise PlaybackError("fixture_model_mismatch")
+
+
+def _validate_response(provider: Provider, model: str, parameters: dict, result: LLMResult) -> None:
+    if result.model_id == model:
+        if provider == "anthropic" and result.usage.get("requested_model", model) != model:
+            raise PlaybackError("fixture_model_mismatch")
+        return
+    # A recorded server-side fallback is a different served model, not a new request.
+    if (
+        provider == "anthropic"
+        and parameters.get("fallbacks") == "default"
+        and result.model_id in MODELS
+        and result.usage.get("requested_model") == model
+        and result.usage.get("served_by_fallback") is True
+    ):
+        return
+    raise PlaybackError("fixture_model_mismatch")
+
+
+def _request_identity(provider: Provider, model: str, parameters: dict) -> dict:
+    return {"provider": provider, "requested_model": model, "parameters": parameters}
 
 
 def sample_inputs(repo: str | Path, fixture_root: Path) -> tuple[str, SourceMasker]:
@@ -104,18 +210,46 @@ class RecordingClient(ValidatingClient):
         self.sample, self.masker = sample_inputs(repo, root)
         self.backend = backend
         self.root = root
-        self.models = getattr(backend, "models", {})
+        self.provider = _provider(backend)
+        self.models = dict(getattr(backend, "models", {})) or {
+            tier: f"fake-{tier}" for tier in ("strong", "fast")
+        }
+        self.parameters = {tier: deepcopy(backend.request_parameters(tier)) for tier in self.models}
+        self.manifest = RecordingManifest(
+            sample=self.sample,
+            provider=self.provider,
+            origin=ORIGINS[self.provider],
+            models=self.models,
+            parameters=self.parameters,
+        )
+        _validate_manifest(self.manifest, self.sample, self.provider)
+        self.directory = root / self.provider / self.sample
+        path = self.directory / "manifest.json"
+        try:
+            if (
+                path.exists()
+                and RecordingManifest.model_validate_json(_read_json(path)) != self.manifest
+            ):
+                raise PlaybackError("recording_configuration_mismatch_use_fresh_directory")
+        except (ValueError, OSError):
+            raise PlaybackError("fixture_manifest_invalid") from None
+        write_json(path, self.manifest.model_dump(mode="json"))
         self.recordings: dict[str, Fixture] = {}
 
     def request_parameters(self, tier: Tier) -> dict:
-        return self.backend.request_parameters(tier)
+        return deepcopy(self.parameters[tier])
 
     def _invoke(self, system: str, user: str, *, tier: Tier, stage: str) -> LLMResult:
         if stage not in STAGES:
             raise PlaybackError("fixture_stage_invalid")
         if stage in self.recordings and len(self.recordings[stage].entries) >= 50:
             raise PlaybackError("fixture_stage_limit")
+        if self.backend.request_parameters(tier) != self.parameters[tier] or (
+            getattr(self.backend, "models", self.models).get(tier) != self.models[tier]
+        ):
+            raise PlaybackError("recording_configuration_changed")
         result = self.backend._invoke(system, user, tier=tier, stage=stage)
+        _validate_response(self.provider, self.models[tier], self.parameters[tier], result)
         response = result.model_dump(mode="json", exclude={"parsed"})
         # Preserve complete response bytes except recognized secret/credential substitutions.
         safe_text = self.masker.text(result.text, allow_dummy=True)
@@ -131,53 +265,90 @@ class RecordingClient(ValidatingClient):
         parameters = self.request_parameters(tier)
         entry = Entry(
             tier=tier,
-            prompt_hash=prompt_digest(system, user, tier, parameters),
+            prompt_hash=prompt_digest(
+                system, user, tier, _request_identity(self.provider, self.models[tier], parameters)
+            ),
             response_hash=digest(response),
             response=response,
+            request_parameters=parameters,
         )
         if stage not in self.recordings:
             self.recordings[stage] = Fixture(
                 sample=self.sample,
                 stage=stage,
-                origin=type(self.backend).__name__,
+                origin=ORIGINS[self.provider],
                 parameters=parameters,
                 entries=[entry],
             )
         else:
             self.recordings[stage].entries.append(entry)
         fixture = self.recordings[stage]
-        write_json(self.root / self.sample / f"{stage}.json", fixture.model_dump(mode="json"))
+        write_json(self.directory / f"{stage}.json", fixture.model_dump(mode="json"))
         return result.model_copy(update={"text": safe_text})
 
 
 class ReplayClient(ValidatingClient):
     is_replay = True
 
-    def __init__(self, repo: str | Path, root: Path = DEFAULT_FIXTURES):
+    def __init__(
+        self,
+        repo: str | Path,
+        root: Path = DEFAULT_FIXTURES,
+        *,
+        provider: Provider = "bedrock",
+        expected_models: dict[Tier, str] | None = None,
+        expected_parameters: dict[Tier, dict] | None = None,
+    ):
         super().__init__()
+        if provider not in ORIGINS:
+            raise PlaybackError("fixture_provider_unknown")
         self.sample, _ = sample_inputs(repo, root)
         self.fixtures = {}
         self.cursors: dict[str, int] = {}
-        self.models = {}
-        self.parameters = {}
-        directory = root / self.sample
+        self.provider = provider
+        directory = root / provider / self.sample
+        if not directory.exists() and provider == "bedrock":
+            directory = root / self.sample  # Existing immutable v1 Bedrock recordings.
         try:
+            if not directory.exists():
+                raise PlaybackError(f"fixture_missing: {self.sample}")
+            self.manifest = RecordingManifest.model_validate_json(
+                _read_json(directory / "manifest.json")
+            )
+            _validate_manifest(self.manifest, self.sample, provider)
+            if expected_models is not None and expected_models != self.manifest.models:
+                raise PlaybackError("fixture_model_mismatch")
+            if expected_parameters is not None and expected_parameters != self.manifest.parameters:
+                raise PlaybackError("fixture_parameters_mismatch")
+            self.models = dict(self.manifest.models)
+            self.parameters = deepcopy(self.manifest.parameters)
             for path in sorted(directory.glob("*.json")):
+                if path.name == "manifest.json":
+                    continue
                 if path.stem not in STAGES or path.is_symlink() or path.stat().st_size > 524288:
                     raise PlaybackError("fixture_file_invalid")
                 if any(parent.is_symlink() for parent in path.parents):
                     raise PlaybackError("fixture_symlink_forbidden")
-                text = path.read_text()
-                assert_public(text)
+                text = _read_json(path)
                 fixture = Fixture.model_validate_json(text)
                 if fixture.sample != self.sample or fixture.stage != path.stem:
                     raise PlaybackError("fixture_identity_mismatch")
+                if fixture.origin != ORIGINS[provider] or fixture.format_version != (
+                    1 if self.manifest.legacy else 2
+                ):
+                    raise PlaybackError("fixture_provider_mismatch")
+                if fixture.parameters != self.parameters.get(fixture.entries[0].tier):
+                    raise PlaybackError("fixture_parameters_mismatch")
                 for entry in fixture.entries:
+                    parameters = self.parameters.get(entry.tier)
+                    if parameters is None or (
+                        not self.manifest.legacy and entry.request_parameters != parameters
+                    ):
+                        raise PlaybackError("fixture_parameters_mismatch")
                     if digest(entry.response) != entry.response_hash:
                         raise PlaybackError("fixture_response_hash_mismatch")
                     result = LLMResult.model_validate(entry.response)
-                    self.models[entry.tier] = result.model_id
-                    self.parameters[entry.tier] = fixture.parameters
+                    _validate_response(provider, self.models[entry.tier], parameters, result)
                     self.tracker.prices["replay:" + result.model_id] = ModelPricing(
                         input_usd_per_million=0, output_usd_per_million=0
                     )
@@ -196,7 +367,13 @@ class ReplayClient(ValidatingClient):
         if fixture is None or index >= len(fixture.entries):
             raise PlaybackError(f"fixture_request_missing: {self.sample}/{stage} #{index + 1}")
         entry = fixture.entries[index]
-        actual = prompt_digest(system, user, tier, self.request_parameters(tier))
+        parameters = self.request_parameters(tier)
+        identity = (
+            parameters
+            if self.manifest.legacy
+            else _request_identity(self.provider, self.models[tier], parameters)
+        )
+        actual = prompt_digest(system, user, tier, identity)
         if tier != entry.tier or actual != entry.prompt_hash:
             raise PlaybackError(
                 f"prompt_hash_mismatch: {self.sample}/{stage} #{index + 1}; "

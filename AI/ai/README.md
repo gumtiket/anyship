@@ -97,6 +97,89 @@ ai/.venv/bin/python -m ai analyze samples/todo --llm bedrock \
 
 Converse를 사용한다. 지원 모델은 temperature=0이며 Sonnet 5.5/Haiku 5.5는 비기본 sampling 옵션을 생략한다. 모델 출력의 완전한 재현성을 주장하지 않는다. JSON 최초 요청+재생성 최대 2회, SDK 전송은 요청당 최대 3회이며 usage를 기록한다. 계정/Marketplace/최초 사용 접근 문제가 있으면 안전하게 분류하고 실제 AI 성공으로 숨기지 않는다.
 
+## Anthropic API 선택 실행
+
+Bedrock을 유지하면서 직접 API를 선택할 수 있다. 기본 `--llm none`, 기존 Bedrock 설정과
+`run_analysis` 함수 시그니처는 바뀌지 않는다. Python SDK는 선택 의존성이며 지연 import한다.
+
+프로젝트 루트에서 설치하고 모델을 명시한다. 지원 ID는 `claude-opus-5-5`,
+`claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-sonnet-4-6`, `claude-haiku-4-5`,
+`claude-haiku-4-5-20251001`이다. 알 수 없는 ID는 호출 전에 거부한다.
+
+```sh
+ai/.venv/bin/python -m pip install -e 'ai[anthropic]'
+export ANTHROPIC_MODEL_ID_STRONG=claude-sonnet-5-5
+export ANTHROPIC_MODEL_ID_FAST=claude-haiku-5-5
+export ANTHROPIC_REFUSAL_FALLBACK=off
+```
+
+API 키는 사용자의 같은 터미널에서만 입력한다. 다음은 macOS zsh의 숨김 입력이며 키를
+셸 명령문·히스토리·파일에 쓰지 않는다. 키를 채팅에 보내거나 CLI 인자로 전달하지 않는다.
+SDK의 기본 인증 해석(`ANTHROPIC_API_KEY` 또는 기존 ant 프로필)을 사용한다.
+터미널에서 export한 키는 이미 실행 중인 Codex 프로세스에 자동 전달되지 않으므로,
+설정한 터미널에서 아래 실행 명령도 실행한다.
+
+```sh
+read -rs 'ANTHROPIC_API_KEY?Anthropic API key (hidden): '
+export ANTHROPIC_API_KEY
+```
+
+먼저 **짧은 확인 호출 1회**만 한다. 앱 소스는 전송하지 않으며 schema/전송 재시도는
+모두 꺼져 있다. 결과에는 프롬프트·응답 원문·키를 저장하지 않고 모델·토큰·지연·비용·안전한
+오류 코드만 기록한다. 성공은 exit 0, 호출/설정 실패는 exit 1, 저장 실패는 exit 2다.
+
+```sh
+ai/.venv/bin/python -m ai llm-check --llm anthropic --tier fast --out out/anthropic-check-fast
+# STRONG도 선택적으로 1회 확인한다.
+ai/.venv/bin/python -m ai llm-check --llm anthropic --tier strong --out out/anthropic-check-strong
+```
+
+성공한 뒤 실제 분석을 실행한다. **소스 코드가 Anthropic으로 직접 전송된다(시크릿은 마스킹).**
+기존 탐지·변환 범위 검사·JSON/pydantic 검증과 게이트/PR 판정은 그대로 적용한다.
+이 `--no-gate` 실행은 컨테이너 검증을 생략하므로 배포 성공이나 PR 승인 근거가 아니다.
+
+```sh
+ai/.venv/bin/python -m ai analyze samples/todo --llm anthropic --no-gate \
+  --save-llm-trace --out out/anthropic-todo
+```
+
+Sonnet 5.5의 strong effort 기본값은 medium, fast는 low다. Haiku 5.5는 disabled thinking과
+low/medium/high effort만 허용한다. 5.5는 temperature/top_p/top_k를 생략한다.
+4.6/4.5는 temperature=0이다. Opus 5.5를 비교하려면 strong 모델을
+`claude-opus-5-5`로 바꾼다. Opus thinking은 항상 켜져 있으며 max_tokens 기본값/최소값은
+16000이다. 이 값은 응답 상한이고 실제 사용량만 과금 추정에 반영한다.
+`ANTHROPIC_EFFORT_STRONG`/`ANTHROPIC_EFFORT_FAST`로 effort를 선택할 수 있다.
+Sonnet/Haiku는 low/medium/high, Opus는 추가로 xhigh/max를 지원한다.
+
+refusal fallback의 클라이언트 기본값은 `default`이며 Opus/Sonnet 5.5에만 공식 beta API를
+적용한다. 위 비교 예시는 모델 비교를 위해 `off`다. `default`로 바꾸면 실제 응답 모델과
+`usage.fallback_ran`, `usage.served_by_fallback`, per-model `usage.iterations`를 trace에 기록한다.
+최종 refusal과 max_tokens는 자동 재호출하지 않는다. fallback은 거절 복구용이며
+인증·rate limit·서버 오류를 다른 모델로 우회하지 않는다.
+
+일반 분석은 JSON 최초 요청+재생성 최대 2회, 전송 시도 최대 3회다. SDK 재시도는 0으로
+설정했다. 429·5xx·연결 오류만 지수 백오프/Retry-After로 재시도한다. 타임아웃과
+400/401/403/404는 재시도하지 않는다. Retry-After가 60초를 넘으면 너무 일찍 재호출하지
+않고 실패를 반환한다. SDK timeout은 호출당 60초이며 전체 분석 90초를 보장하지 않는다.
+
+`--artifact-llm anthropic`은 Dockerfile/명세 제안의 추가 유료 호출을 선택한다.
+record는 `--llm record --llm-provider anthropic --llm-fixtures <별도 경로>`로 선택할 수 있다.
+기존 replay/fixture/데모 캐시는 갱신하지 않는다.
+
+`cost.json`은 [Anthropic 공식 가격](https://platform.claude.com/docs/en/about-claude/pricing)을
+2026-10-09에 확인한 standard/global 직접 API의 USD 추정치다(청구서 아님).
+Opus 5.5 입력/출력 $4/$20, Sonnet 5.5 $2/$10, Haiku 5.5 $0.10/$0.50,
+Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5이며 단위는 100만 토큰이다.
+Haiku 5.5는 전체 프롬프트가 100,000토큰을 초과하면 $0.50/$2.50을 적용한다.
+캐시 read/5m/1h 사용량과 요금도 분리 계산한다. 캐시 duration 정보 누락, 장문 Haiku의
+캐시 요금, 미등록 응답 모델, earlier refusal의 청구 여부는 추측하지 않고 null로 남긴다.
+fallback은 cost.calls에 실제 모델별 시도를 기록하며 trace의 iterations와 대조한다.
+API 응답의 input_tokens는 캐시 토큰을 제외하므로 캐시 사용량은 trace도 함께 확인한다.
+Bedrock 모델/추론 프로필의 미등록 요금은 기존대로 null이다.
+
+구조화 출력 `output_config.format`은 이번에 사용하지 않는다. SDK가 해당 필드를
+지원하므로 후속 적용은 가능하지만 현재는 JSON 프롬프트와 pydantic 검증을 사용한다.
+
 ## Docker 선택 실행
 
 ```sh
@@ -108,7 +191,7 @@ ai/.venv/bin/python -m pytest -m docker ai/tests/test_gate.py ai/tests/test_reco
 
 해시로 확인한 두 자체 샘플의 임시 변환본만 실행한다. Linux 이미지, nonroot/read-only/tmpfs, internal network, cap-drop/no-new-privileges, CPU/메모리/PID 제한을 적용한다. 부모 시크릿/실제 DB와 Docker socket을 컨테이너에 전달하지 않는다. 마이그레이션 명령은 빈 DB용 `python -m app.migrate`로 제한하며 기존 스키마 업그레이드나 데이터 복사를 하지 않는다.
 
-Dockerfile은 Python 3.12-slim, LWA 1.1.0, PORT=8080, readiness `/healthz`를 사용한다. 이미지 내용에 SHA/시각/랜덤 값을 넣지 않는다. 외부 태그와 `source.commit`은 추적 메타데이터다. 동일 이미지 재사용과 재빌드 동일성을 구분하며 대상 플랫폼은 C가 확정하고 재검증해야 한다. 러너는 현재 macOS/Linux POSIX 잠금을 사용한다.
+Dockerfile은 Python 3.12-slim, LWA 1.1.0, PORT=8080, readiness `/healthz`를 사용한다. 이미지 내용에 SHA/시각/랜덤 값을 넣지 않는다. 외부 태그와 `source.commit`은 추적 메타데이터다. 동일 이미지 재사용과 재빌드 동일성을 구분하며 대상 플랫폼은 C가 확정하고 재검증해야 한다. 러너는 현재 macOS/Linux POSIX 잠금을 사용한다. Windows에서는 오프라인 분석·Fake 러너를 사용할 수 있지만 실제 Docker 게이트는 `docker_gate_requires_posix` 오류로 거부한다. 임시 작업 공간·빌드 컨텍스트·출력 파일은 UTF-8 및 LF/CRLF 바이트를 보존한다.
 
 게이트는 최초 포함 최대 3회 실행한다. 기존 Python 파일/고정 Dockerfile 템플릿 안의 수정만 허용하며 공개 API·데이터 모델·환경변수 계약·보안 조건의 변경은 거부한다. 의존성 파일을 임의로 바꾸는 복구는 지원하지 않는다. 수정안은 apply 검사/컴파일 뒤 재검증하고 시도별 원인·수정 요약·중단 사유를 GateReport에 남긴다. 보안 제약은 [체크리스트](../docs/gate-security-checklist.md)를 따른다.
 
@@ -158,14 +241,35 @@ record/replay CLI의 패키징은 고정 템플릿이며 artifact-llm은 none이
 
 ```sh
 # 사전 결과 표시. hit는 현재 Bedrock/Docker 호출 없이 로그만 순서대로 재생한다.
-ai/.venv/bin/python -m ai analyze samples/todo --use-demo-cache --out out/cached-todo/
-ai/.venv/bin/python -m ai analyze samples/todo-scheduler --use-demo-cache --out out/cached-scheduler/
+ai/.venv/bin/python -m ai analyze samples/todo --env onprem --use-demo-cache --llm none --out out/cached-todo/
+ai/.venv/bin/python -m ai analyze samples/todo-scheduler --env aws --use-demo-cache --llm none --out out/cached-scheduler/
 
 # 실제 Bedrock + Docker로 두 캐시와 LLM fixture 재작성. 실제 추론 요금 발생.
 ai/.venv/bin/python ai/scripts/build_demo_cache.py
+
+# 다음 녹화 단계에서만 실행: 실제 Anthropic + Docker, 유료 호출.
+ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm anthropic --fixtures out/demo-recordings
+
+# 같은 녹화를 replay하여 새 Docker 검증. 새 모델 호출 없음.
+ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm replay --llm-provider anthropic --fixtures out/demo-recordings
 ```
 
 캐시는 `ai/demo-cache/<sample>/out`의 7종과 manifest에 있다. source/engine/설정/각 파일 해시가 맞아야 사용한다. 대상 env, commit, 명시한 source.repo, profile, 이미지 식별자, tfvars/비용 가정, 원본 비교 여부도 확인한다. 캐시가 없거나 달라지면 정상 실행으로 돌아가고 로그로 알린다. 실제 분석 실패 후 몰래 캐시로 성공을 대신하지 않는다. source.repo 미제공의 데모 캐시는 sample:// 이름을 사용하며 실제 GitHub 저장소/commit으로 해석하지 않는다.
+
+새 캐시 생성 설정은 todo=onprem, todo-scheduler=aws다. 위 고정 명령에 commit,
+source-repo, app-name 등을 추가하면 settings_key가 달라져 hit하지 않을 수 있다.
+이 캐시는 현재 웹(A)에 연결되지 않은 **CLI 전용 대비책**이다. 웹 실패를 자동으로
+대신하지 않는다. `--llm none` 명령은 miss에서도 모델 호출이 없으며,
+execution_source=demo_cache인지 확인해 사전 결과와 현재 규칙 분석을 구분한다.
+현재 저장된 캐시는 이전 엔진의 결과이며 이번 작업에서는 재생성하지 않는다.
+
+녹화 v2는 `<fixtures>/<provider>/<sample>/`의 manifest와 stage 파일로 구분한다.
+replay의 `--llm-provider`는 기대 제공자이며 origin·요청/응답 모델·파라미터·응답 해시·
+프롬프트/스키마/입력 해시가 맞지 않으면 PlaybackError로 중단한다. v2 요청 해시에는
+제공자와 요청 모델도 포함한다. 서버 fallback은 요청 모델과 실제 응답 모델을 구분해 검증한다.
+기존 v1 Bedrock 응답은 그대로 보존하고 고정된 legacy metadata로 검증한다.
+기존 AWS용 todo 녹화를 onprem 요청으로 바꾸거나 해시를 수정해서 재생하지 않는다.
+모델/파라미터를 바꿔 다시 녹화할 때는 새 fixtures 경로를 사용한다.
 
 모든 재생 로그에 `(사전 실행 결과)`를 붙이고 짧고 제한된 지연만 적용한다. 과거 로그의 단계 시간/trace 언급은 과거 실행을 가리키며, 공유 캐시에 개인 trace 파일은 넣지 않는다. 응답은 LLM fixture에서 확인한다. 현재 결과는 execution_source=demo_cache, 현재 gate.status=skipped, historical_status=passed, pr_eligible=false다. 캐시 비용은 historical=true와 external_calls=0이며 total/calls/stages는 과거 사용량이다. 추가 cache-provenance.json에 이전 시간·해시를 기록한다. 캐시 hit에서는 새 BuildContext를 반환하지 않는다.
 
@@ -227,6 +331,9 @@ ai/.venv/bin/python ai/scripts/build_demo_cache.py --llm replay
 캐시 provenance의 llm_execution_source=llm_replay와 recorded_llm_usage를 표시한다.
 이 replay 모드로 생성한 cache cost는 과거의 재생 실행 사용량(새 AWS 토큰/비용 0)이고, recorded_llm_usage는 별도의 원래 Bedrock 과거 사용량이다.
 그 원래 비용 null을 0원으로 바꾸지 않는다. 캐시 복원 시 현재 gate는 skipped이고 과거 Docker passed만 표시한다.
+
+2026-10-11 시연 엔진의 후보 필드·동결·다음 녹화 절차는
+[demo-engine-freeze.md](deliverables/demo-engine-freeze.md)를 따른다.
 
 검토 결함/증거와 남은 계약은 [수정 요약](../docs/review-fix-summary.md),
 A/C의 실행 조건은 [배포 명세 계약](deliverables/deploy-spec-contract.md)을 참고한다.

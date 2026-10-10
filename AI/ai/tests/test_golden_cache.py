@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -6,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from ai.cli import main
-from ai.demo_cache import DEFAULT_CACHE, save_cache
+from ai.demo_cache import DEFAULT_CACHE, engine_hash, save_cache
 from ai.detectors import RepoView
 from ai.gate.runner import FakeRunner
 from ai.golden import core_result
@@ -33,7 +34,7 @@ def test_record_and_replay_preserve_schema_retry_sequence_without_external_usage
     backend = FakeLLMClient(["{}", '{"message":"ok"}'])
     record = RecordingClient(backend, SAMPLE, tmp_path / "llm")
     first = record.complete("system", "user", tier="fast", schema=Message, stage="diagnose")
-    replay = ReplayClient(SAMPLE, tmp_path / "llm")
+    replay = ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
     second = replay.complete("system", "user", tier="fast", schema=Message, stage="diagnose")
     replay.assert_consumed()
     assert first.parsed == second.parsed
@@ -42,7 +43,7 @@ def test_record_and_replay_preserve_schema_retry_sequence_without_external_usage
     assert replay.tracker.report().total.input_tokens == 0
     assert replay.tracker.report().total.cost_usd == 0
     assert second.transport_attempts == 0
-    fixture = json.loads((tmp_path / "llm/todo/diagnose.json").read_text())
+    fixture = json.loads((tmp_path / "llm/fake/todo/diagnose.json").read_text())
     assert len(fixture["entries"]) == 2
     assert fixture["entries"][0]["prompt_hash"] != fixture["entries"][1]["prompt_hash"]
     assert "request_system" not in fixture and "request_user" not in fixture
@@ -53,7 +54,7 @@ def test_prompt_or_schema_changes_are_fatal_not_normal_llm_fallback(tmp_path):
     RecordingClient(backend, SAMPLE, tmp_path / "llm").complete(
         "system", "user", tier="fast", schema=Message, stage="diagnose"
     )
-    replay = ReplayClient(SAMPLE, tmp_path / "llm")
+    replay = ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
     with pytest.raises(PlaybackError, match="prompt_hash_mismatch"):
         replay.complete("changed system", "user", tier="fast", schema=Message, stage="diagnose")
     with pytest.raises(PlaybackError, match="prompt_hash_mismatch"):
@@ -64,15 +65,15 @@ def test_fixture_response_tampering_and_unused_records_are_rejected(tmp_path):
     RecordingClient(FakeLLMClient(['{"message":"ok"}']), SAMPLE, tmp_path / "llm").complete(
         "system", "user", tier="fast", schema=Message, stage="diagnose"
     )
-    replay = ReplayClient(SAMPLE, tmp_path / "llm")
+    replay = ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
     with pytest.raises(PlaybackError, match="unused"):
         replay.assert_consumed()
-    path = tmp_path / "llm/todo/diagnose.json"
+    path = tmp_path / "llm/fake/todo/diagnose.json"
     fixture = json.loads(path.read_text())
     fixture["entries"][0]["response"]["text"] = '{"message":"edited"}'
     path.write_text(json.dumps(fixture))
     with pytest.raises(PlaybackError, match="response_hash_mismatch"):
-        ReplayClient(SAMPLE, tmp_path / "llm")
+        ReplayClient(SAMPLE, tmp_path / "llm", provider="fake")
 
 
 def test_credentials_redacted_before_record_parse_and_storage(tmp_path):
@@ -81,7 +82,7 @@ def test_credentials_redacted_before_record_parse_and_storage(tmp_path):
         FakeLLMClient([json.dumps({"message": credential_url})]), SAMPLE, tmp_path / "llm"
     )
     result = record.complete("system", "user", tier="fast", schema=Message, stage="diagnose")
-    text = (tmp_path / "llm/todo/diagnose.json").read_text()
+    text = (tmp_path / "llm/fake/todo/diagnose.json").read_text()
     assert "test-password" not in text and "test-user" not in text
     assert "[REDACTED]" in result.parsed.message
     assert_public(text)
@@ -125,6 +126,13 @@ def test_record_rejects_non_sample_and_output_inside_original(tmp_path):
 def test_recorded_golden_pipeline_and_same_input_dockerfile_bytes(tmp_path, name, expected):
     repo = ROOT / "samples" / name
     expected_core = json.loads((ROOT / "ai/tests/fixtures/golden" / f"{name}.json").read_text())
+    # C's 2026-10-10 contract retires per-app container tfvars. Keep the
+    # historical golden files unchanged and compare all other fields exactly.
+    if expected == "aws-always-on":
+        expected_core["tfvars"] = {}
+        expected_core["needs_confirmation"] = [
+            key for key in expected_core["needs_confirmation"] if key != "tfvars_schema"
+        ]
     outputs = []
     for number in range(2):
         replay = ReplayClient(repo)
@@ -157,6 +165,8 @@ def test_committed_recordings_contain_no_credentials():
         fixture = json.loads(path.read_text())
         assert fixture["origin"] == "BedrockClient"
         assert_public(path.read_text())
+        if path.name == "manifest.json":
+            continue
         for entry in fixture["entries"]:
             assert_public(entry["response"]["text"])
 
@@ -166,7 +176,26 @@ class MustNotCall:
         raise AssertionError("Cache hit must never call LLM")
 
 
-def test_actual_demo_cache_hit_is_historical_and_does_not_call_dependencies(tmp_path):
+@pytest.mark.parametrize("sample", ["todo", "todo-scheduler"])
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "저장된 데모 캐시는 LLM 범위 검사 변경 전 엔진의 결과입니다. "
+        "사용자 확인 후 replay + Docker로 재생성하고 이 임시 xfail을 제거해야 합니다."
+    ),
+)
+def test_stored_demo_cache_matches_current_engine(sample):
+    # No mock: keep known stale cache visible separately from replay behavior tests.
+    manifest = json.loads((DEFAULT_CACHE / sample / "manifest.json").read_text())
+    assert manifest["engine_hash"] == engine_hash(), f"{sample}: cache_engine_hash_mismatch"
+
+
+def test_recorded_demo_cache_hit_with_matching_engine_is_historical(tmp_path, monkeypatch):
+    manifest = json.loads((DEFAULT_CACHE / "todo/manifest.json").read_text())
+    # Exercise replay at its recorded engine version. Never rewrite a historical manifest
+    # to claim that the current engine has passed Docker; mismatch tests remain separate.
+    monkeypatch.setattr("ai.demo_cache.engine_hash", lambda: manifest["engine_hash"])
     logs = []
     result = run_analysis(
         SAMPLE,
@@ -185,10 +214,9 @@ def test_actual_demo_cache_hit_is_historical_and_does_not_call_dependencies(tmp_
     assert result.cost.historical and result.cost.external_calls == 0
     assert all("(사전 실행 결과)" in message for _, message in logs)
     assert all((tmp_path / "out" / name).exists() for name in OUTPUT_NAMES)
-    manifest = json.loads((DEFAULT_CACHE / "todo/manifest.json").read_text())
-    assert [(s.value, m.removeprefix("(사전 실행 결과) ")) for s, m in logs[1:]] == [
-        (e["stage"], e["message"]) for e in manifest["events"]
-    ]
+    assert [stage.value for stage, _ in logs[1:]] == [e["stage"] for e in manifest["events"]]
+    assert not any(re.search(r"\bP\d+(?::| 결과:)", message) for _, message in logs)
+    assert "규칙 진단·변경안·패키징·추천 시작" in logs[1][1]
 
 
 @pytest.mark.parametrize("change", ["code", "env", "commit", "engine", "corrupt", "missing"])
@@ -237,7 +265,7 @@ def test_cache_never_overwrites_input_and_fake_result_cannot_be_published_as_liv
         SAMPLE, out_dir=tmp_path / "out", runner=FakeRunner(), log=lambda *_: None
     )
     try:
-        with pytest.raises(ValueError, match="actual_bedrock_and_docker"):
+        with pytest.raises(ValueError, match="actual_provider_and_docker"):
             save_cache(SAMPLE, result, [], root=tmp_path / "cache")
     finally:
         result.build_context.cleanup()

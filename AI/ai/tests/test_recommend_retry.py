@@ -279,8 +279,9 @@ def test_fake_complete_pipeline_and_pending_contract(tmp_path, name, expected):
     )
     try:
         assert result.recommendation.set == expected
-        assert result.recommendation.needs_confirmation == [
-            "tfvars_schema",
+        assert result.recommendation.needs_confirmation == (
+            ["tfvars_schema"] if expected == "aws-serverless" else []
+        ) + [
             "cost_table",
             "env_policy",
             "app_reserved_names",

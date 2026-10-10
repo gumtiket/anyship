@@ -2,13 +2,17 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0008"
+revision = "0008_ai_analyses"
 down_revision = "0007"
 branch_labels = None
 depends_on = None
 
 
 def upgrade():
+    # Old AI-only databases at "0008" are indistinguishable by revision alone
+    # from main's deployment migration. Never adopt that schema automatically.
+    if not op.get_context().as_sql and sa.inspect(op.get_bind()).has_table("ai_analyses"):
+        raise RuntimeError("Legacy AI revision 0008 requires schema verification before migration; do not stamp it as the deployment revision.")
     op.create_table("ai_analyses",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("project_id", sa.String(36), sa.ForeignKey("projects.id"), nullable=False),

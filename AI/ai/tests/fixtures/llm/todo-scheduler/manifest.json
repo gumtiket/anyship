@@ -1,0 +1,9 @@
+{
+  "format_version": 2,
+  "sample": "todo-scheduler",
+  "provider": "bedrock",
+  "origin": "BedrockClient",
+  "models": {"fast": "global.anthropic.claude-haiku-4-5-20251001-v1:0"},
+  "parameters": {"fast": {"inferenceConfig": {"maxTokens": 4096, "temperature": 0}}},
+  "legacy": true
+}

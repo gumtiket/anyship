@@ -15,9 +15,16 @@ AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안�
 
 실제 AI에는 `BEDROCK_REGION`, `BEDROCK_MODEL_ID_STRONG`, `BEDROCK_MODEL_ID_FAST`와 서버의 AWS SDK 자격 증명 체인(환경 변수, 프로필 또는 워크로드 역할)이 필요합니다. 해당 모델에 대한 Bedrock 호출 권한을 준비하고 서버를 재시작합니다. GitHub 로그인 토큰·DB 비밀은 모델 작업 프로세스로 전달하지 않습니다. Fake 모드는 AWS 자격 증명을 전달하지 않으며 운영 환경에서 금지됩니다. 유료 모델 호출은 사용자가 분석을 시작할 때만 발생합니다.
 
-분석 실행에는 **Linux 서비스 환경**이 필요합니다. 원래 AI 패키지가 POSIX 전용 `fcntl`을 불러오므로 Windows 서버는 새 분석을 원격 브랜치 생성 전에 `503`으로 거부하고 화면에 안내합니다. 기존 이력 조회·검토·커밋 저장은 사용할 수 있습니다. 커밋용 diff 검증·적용은 Service가 담당하며 AI 내부 모듈을 불러오지 않습니다. 이번 복원은 `service/`와 `frontend/`만 변경하고 AI·Infra 코드는 유지합니다.
+최신 `main`의 AI 패키지는 컨테이너 게이트를 생략하는 분석을 Windows와 POSIX에서 지원합니다. Service도 이 경로를 사용하며 AI 패키지가 없으면 원격 브랜치 생성 전에 `503`으로 안내합니다. 커밋용 diff 검증·적용은 Service가 담당하며 AI 내부 모듈을 불러오지 않습니다. `main`에 반영된 AI·Infra 소스를 유지합니다. AI의 `review_candidates`는 화면에서 별도 검토 후보로 표시하며 확정 진단·수정 완료 건수에 포함하지 않습니다. 이 필드가 없는 기존 분석 이력도 조회할 수 있습니다.
 
-복원 후 `service/`에서 설정을 불러온 환경으로 `python -m alembic upgrade head`를 실행합니다. `0008`은 분석 이력, `0009`는 작업 브랜치·커밋 체크포인트를 저장합니다. DB가 이미 `0009`이면 추가 변경은 없으며 기존 이력을 유지합니다. 리버트 때문에 DB를 다운그레이드할 필요는 없습니다.
+복원 후 DB 백업을 준비하고 `service/`에서 설정을 불러온 환경으로 `python -m alembic upgrade head`를 실행합니다. `main`의 배포용 `0008`은 그대로 유지합니다. AI 분석 이력은 고유 revision `0008_ai_analyses`, 작업 브랜치·커밋 체크포인트는 기존 `0009`를 사용하며, 두 경로를 `0010_merge_ai_deployments`에서 합칩니다.
+
+```text
+0007 ── 0008 (실제 배포) ────────────────────┐
+     └─ 0008_ai_analyses ── 0009 (AI 커밋) ──┴─ 0010_merge_ai_deployments
+```
+
+기존 `main`의 `0008` DB에는 AI 테이블을 추가하고, 기존 AI 브랜치의 `0009` DB에는 배포 테이블·환경 필드를 추가합니다. 기존 분석·커밋 이력과 배포 데이터는 유지하며 신규 DB도 같은 head에 도달합니다. **과거 AI 전용 `0008`에서 멈춘 DB**는 배포용 `0008`과 번호만으로 구분할 수 없으므로 자동 업그레이드를 거부합니다. 실제 테이블·컬럼·인덱스와 적용 이력을 확인하고 AI 전용 경로를 복구한 뒤 진행해야 하며, 확인 없이 `stamp`하거나 DB를 다운그레이드하지 마세요.
 
 GitHub App의 `Contents: Read and write`와 이용자의 저장소 쓰기 권한이 필요합니다. 이 흐름에는 PR 권한이 필요하지 않습니다. 저장소 규칙에 의해 브랜치 생성이나 갱신이 거부되면 실패 상태를 표시합니다. Git 참조 갱신은 항상 [fast-forward 방식](https://docs.github.com/en/rest/git/refs#update-a-reference)을 사용합니다.
 
@@ -37,7 +44,7 @@ API는 세션·CSRF·워크스페이스 소유권을 확인합니다.
 
 이번 범위는 1–3단계(기준 선택·새 브랜치 생성·AI 분석/수정 커밋)입니다. 대상 앱의 빌드·컨테이너 검증·배포·자동 수정 재빌드·PR 생성은 이 경로에서 실행하지 않습니다. Python 문법 확인만 수행하며, 대상 저장소의 기존 push 트리거 CI는 GitHub 설정에 따릅니다. Bedrock 분석 프로세스 제한은 420초, Fake는 90초입니다. 10분 동안 끝나지 않은 작업은 중단으로 처리합니다.
 
-검증: `python -m pytest tests/test_ai_analyses.py tests/test_ai_branches.py tests/test_ai_patch.py -q`는 외부 GitHub/AWS 호출 없이 권한, SHA 고정, 충돌, 검토 변조, 재시도 및 원본 보존을 확인합니다. 브랜치 계약 테스트는 명시적인 AI 응답 대역을 사용하며, 실제 AI 파이프라인 테스트도 별도로 유지합니다. Windows에서는 실제 AI 파이프라인 테스트만 실행 환경 제약으로 건너뜁니다.
+검증: `python -m pytest tests/test_ai_analyses.py tests/test_ai_branches.py tests/test_ai_patch.py tests/test_ai_deployment_migration.py -q`는 외부 GitHub/AWS 호출 없이 권한, SHA 고정, 충돌, 검토 변조, 재시도 및 원본 보존을 확인합니다. 브랜치 계약 테스트와 실제 오프라인 AI 파이프라인 테스트를 Windows/POSIX에서 실행합니다. 마이그레이션 테스트는 신규 DB, 기존 배포 DB, 기존 AI `0009` DB에서 데이터 보존과 단일 head를 검증하며, PostgreSQL에서도 `ANYSHIP_TEST_DATABASE_URL`의 격리된 테스트 스키마로 실행할 수 있습니다.
 
 ## Mock 어댑터로 배포 흐름 시험하기
 
@@ -179,6 +186,50 @@ AWS 인증과 AssumeRole은 실제 AWS 어댑터 실행 환경의 책임입니�
 `python -m pytest tests/test_aws_onboarding.py tests/test_aws_adapter.py tests/test_aws_config_migration.py -q`로 API·동시 요청·실패/만료·SDK 모의 응답·DB 업그레이드/다운그레이드를 확인합니다. 실제 AWS 리소스 생성이나 호출은 하지 않습니다. PostgreSQL 테스트는 기존 `ANYSHIP_TEST_DATABASE_URL` 계약(이름이 `_test`로 끝나는 DB, 테스트별 독립 스키마)을 따릅니다.
 
 참고: [CloudFormation quick-create](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-console-create-stacks-quick-create-links.html), [타사 역할 접근과 External ID 검증](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_common-scenarios_third-party.html), [Boto3 STS](https://docs.aws.amazon.com/boto3/latest/reference/services/sts/client/assume_role.html).
+
+## 실제 배포 데이터 모델 (준비 중)
+
+실제 배포(`anyship_adapters.Deployer`)를 서비스에 붙이기 위한 데이터 모델입니다. **아직 API와 화면, 실행기는 없고**(후속 이슈), 위 Mock 배포와 별개입니다. Mock 테이블과 코드는 건드리지 않으며 실제 어댑터로 자동 대체하지도 않습니다.
+
+`python -m alembic upgrade head`로 `0008`을 적용하면 다음이 추가됩니다. 기존 데이터는 그대로이고 새 컬럼은 비어 있습니다.
+
+| 대상 | 내용 |
+|---|---|
+| `aws_environments` 컬럼 | `env_id`, `host`, `db_address`, `db_port`, `db_secret_arn`, `state_bucket` (모두 NULL 허용) |
+| `deployments` | 프로젝트당 하나의 실제 배포 대상: AWS 환경, 세트 이름, 앱 이름, 현재 이미지 태그, URL, 진행 중 작업과 `lease_until` |
+| `deploy_jobs` | 작업 이력: `(프로젝트, 요청 ID)`가 유일, 동작, 상태, 실패한 `stage`, 로그, 결과 |
+
+- `env_id`는 DNS 이름과 Terraform state의 키에 쓰는 **바뀌지 않는 값**(최대 21자, 유일)입니다. 정해지지 않았으면 환경 레코드 ID에서 `e` + 20자로 정합니다. 이미 기반을 만들어 둔 계정은 만들 때 쓴 값(예: `test`)을 직접 넣어야 기반을 찾습니다.
+- `host`, `db_address`, `db_port`, `db_secret_arn`은 공용 기반의 출력이고 `state_bucket`은 Terraform state를 두는 사용자 계정의 S3 버킷입니다. **모두 비밀이 아닙니다.** DB 비밀번호는 사용자 계정의 Secrets Manager에만 있고, 사용자가 배포 때 입력하는 비밀은 어느 컬럼에도 저장하지 않습니다.
+- `deployments.lease_until`은 작업 선점의 만료 시각(초)입니다. 첫 배포에서 공용 기반을 만드는 데 약 20분이 걸리므로 TTL은 그보다 길어야 합니다(25~30분 이상).
+
+`app/deploy_state.py`가 환경 레코드와 어댑터 사이를 잇습니다. 값을 바꾸면 곧바로 커밋합니다.
+
+| 함수 | 하는 일 |
+|---|---|
+| `assign_env_id(session, row)` | `env_id`가 없으면 정하고, 있으면 바꾸지 않습니다 |
+| `adapter_environment(row)` | 어댑터의 `AwsEnvironment`로 변환합니다. **`CONNECTED`이고 검증된 `role_arn`이 있는 환경만** 허용하며, 저장만 해 둔 `submitted_role_arn`으로 대신하지 않습니다 |
+| `ensure_state_bucket(session, row, access)` | `state_bucket`이 비어 있으면 `stack_name`의 온보딩 스택 출력(`StateBucketName`)에서 읽어 저장합니다 |
+| `save_foundation(session, row, fields)` | 배포가 성공하면 결과의 `details["foundation"]` 4개 값을 저장합니다. 어댑터 모델의 규칙(RDS 도메인, 같은 계정의 비밀 ARN 등)을 통과해야 합니다 |
+
+오류는 `DeployStateError(code, message)`이고 문구에 저장된 값을 싣지 않습니다. 스택 이름은 사용자가 콘솔에서 바꿀 수 있어서 `ensure_state_bucket`은 `stack_not_found`로 실패할 수 있습니다(어댑터의 `AwsAccess.read_state_bucket`이 내는 오류 코드: `stack_not_found`, `stack_not_ready`, `stack_output_invalid`, `invalid_stack_name`).
+
+**시험**
+
+```bash
+python -m pytest tests/test_real_deployment_migration.py tests/test_deploy_state.py -q   # SQLite. AWS를 부르지 않는다
+```
+
+실제 계정으로 확인하려면 서버에서 시험용 SQLite DB에 환경 한 건을 만들고(서비스 운영 DB는 건드리지 않음) 스크립트를 돌립니다.
+
+```bash
+cd service
+python ../scripts/seed_test_environment.py --database ~/anyship-test.db --role-arn <역할 ARN> --stack-name <온보딩 스택 이름>   # External ID는 입력창으로
+APP_DATABASE_URL=sqlite:////home/<사용자>/anyship-test.db python ../scripts/smoke_deploy_state.py --environment-id <출력된 ID> --env-id test
+```
+
+`smoke_deploy_state.py`는 진짜 `describe_stacks`로 `StateBucketName`을 읽고, `ensure_state_bucket`과 `TerraformRunner.read_foundation` 결과의 `save_foundation`까지 확인합니다(테스트 계정에서 11/11).
+PostgreSQL 마이그레이션은 서버에서 `alembic upgrade head`가 성공했고 테이블과 컬럼이 만들어진 것까지 확인했습니다. 다운그레이드는 SQLite 테스트로만 확인했습니다.
 
 ## 등록한 저장소 연결 삭제
 

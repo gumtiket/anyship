@@ -51,7 +51,9 @@ def _write_output(path: Path, text: str) -> None:
     # Replacing the directory entry also preserves a source file hard-linked to old output.
     temporary = None
     try:
-        with NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as file:
+        with NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", dir=path.parent, delete=False
+        ) as file:
             temporary = Path(file.name)
             file.write(text)
         temporary.replace(path)
@@ -170,7 +172,7 @@ def run_analysis(
 
     log(
         Stage.ANALYZING,
-        "P5: 규칙 진단·변경안·패키징·추천 시작 — 원본 코드·DB는 수정하지 않습니다.",
+        "규칙 진단·변경안·패키징·추천 시작 — 원본 코드·DB는 수정하지 않습니다.",
     )
     view = RepoView(repo)
     framework = detect_framework(view)
@@ -323,7 +325,7 @@ def run_analysis(
                     warnings=list(transformation.warnings),
                 )
             )
-        gate = GateReport(status="skipped", reason="P5: 게이트 생략 또는 자체 샘플이 아닙니다.")
+        gate = GateReport(status="skipped", reason="게이트 생략 또는 자체 샘플이 아닙니다.")
         with measured("gate", Stage.VALIDATING if runner is not None else Stage.ANALYZING):
             if (
                 runner is not None
@@ -459,7 +461,8 @@ def run_analysis(
     log(
         Stage.ANALYZING,
         f"규칙 진단 완료: {framework.support_grade}, "
-        f"위반 {len(diagnosis.violations)}개, 신호 {len(signals)}개, "
+        f"규칙 위반 {len(diagnosis.violations)}개, "
+        f"AI 검토 후보 {len(diagnosis.review_candidates)}개, 신호 {len(signals)}개, "
         f"변경 파일 {len(transformation.changed_files)}개. 출력 7종 기록.",
     )
     if transformation.status == "failed":

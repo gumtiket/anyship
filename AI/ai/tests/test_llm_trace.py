@@ -37,7 +37,7 @@ def test_trace_includes_every_schema_attempt_masked_prompts_and_rule_comparison(
                 "factor": 3,
                 "file": "app/main.py",
                 "line": 1,
-                "evidence": "검토용 근거",
+                "evidence": RepoView(SAMPLE).read("app/main.py").splitlines()[0],
                 "description": "검토용 후보",
             }
         ],

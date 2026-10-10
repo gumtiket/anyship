@@ -81,6 +81,13 @@ def generate_spec(
                     "않습니다.",
                 )
             )
+            if variable.name in EXTERNAL_URLS:
+                transformation.warnings.append(
+                    WarningItem(
+                        code="external_resource_required",
+                        message=f"{variable.name}: C의 외부 자원 바인딩 확인이 필요합니다.",
+                    )
+                )
             continue
         secret = variable.secret or credential_name(variable.name)
         if not secret and variable.default is None:
@@ -124,6 +131,18 @@ def generate_spec(
             )
             continue
         env.append(setting)
+    release = None
+    if transformation.migrate_command:
+        try:
+            release = Release(migrate=transformation.migrate_command)
+        except ValidationError:
+            transformation.warnings.append(
+                WarningItem(
+                    code="release_migrate_deferred",
+                    message="migrate 명령은 한 줄 500자 이하만 허용합니다. 생성을 보류했습니다.",
+                )
+            )
+            transformation.migrate_command = None
     spec = DeploySpec(
         app=app,
         source=Source(repo=source_repo, commit=commit),
@@ -138,9 +157,7 @@ def generate_spec(
             websocket=websocket,
         ),
         ingress="public",
-        release=Release(migrate=transformation.migrate_command)
-        if transformation.migrate_command
-        else None,
+        release=release,
         profile=profile,
     )
     validate_spec(spec)

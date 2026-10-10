@@ -14,7 +14,7 @@ def core_result(result: AnalysisResult) -> dict:
     spec.pop("source", None)  # External provenance is not application behavior.
     return {
         "support_grade": result.diagnosis.support_grade,
-        "violations": sorted(v.id for v in result.diagnosis.violations),
+        "violations": sorted(v.id for v in result.diagnosis.violations if v.source == "rule"),
         "factor_reviews": [r.model_dump(mode="json") for r in result.diagnosis.factor_reviews],
         "signals": [s.model_dump(mode="json") for s in result.diagnosis.signals],
         "set": result.recommendation.set,

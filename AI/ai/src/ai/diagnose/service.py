@@ -5,7 +5,7 @@ from pydantic import Field
 
 from ai.detectors.repo import RepoView
 from ai.llm.base import LLMClient
-from ai.models import Diagnosis, FactorReview, OutputModel, Violation, WarningItem
+from ai.models import Diagnosis, FactorReview, OutputModel, ReviewCandidate, WarningItem
 from ai.security import SourceMasker
 
 FACTOR_OWNERS = (
@@ -155,6 +155,7 @@ def enrich(
             if (
                 candidate.factor not in INSPECTED_FACTORS
                 or candidate.file not in repo.files()
+                or candidate.file in masker.blocked_files
                 or candidate.line > len(repo.read(candidate.file).splitlines())
                 or not candidate.evidence.strip()
                 or (candidate.file, candidate.line, candidate.factor) in existing
@@ -166,19 +167,24 @@ def enrich(
                     )
                 )
                 continue
-            result.violations.append(
-                Violation(
+            evidence = masker.text(candidate.evidence).strip()
+            source_line = masker.text(repo.read(candidate.file).splitlines()[candidate.line - 1])
+            if not evidence or evidence not in source_line:
+                result.warnings.append(
+                    WarningItem(
+                        code="llm_candidate_evidence_mismatch",
+                        message="근거와 실제 소스 줄이 일치하지 않는 AI 검토 후보를 제외했습니다.",
+                    )
+                )
+                continue
+            result.review_candidates.append(
+                ReviewCandidate(
                     id=f"llm_candidate:{candidate.file}:{candidate.line}:{candidate.factor}",
                     factor=candidate.factor,
-                    rule="llm_candidate",
                     file=candidate.file,
                     line=candidate.line,
-                    evidence=masker.text(candidate.evidence),
+                    evidence=evidence,
                     description=masker.text(candidate.description),
-                    source="llm",
-                    auto_fixable=False,
-                    change_class="risky",
-                    confidence="needs_review",
                 )
             )
             existing.add((candidate.file, candidate.line, candidate.factor))

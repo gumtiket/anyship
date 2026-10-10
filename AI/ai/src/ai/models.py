@@ -41,6 +41,17 @@ class FactorReview(OutputModel):
     status: Literal["ok", "violation", "n/a"]
 
 
+class ReviewCandidate(OutputModel):
+    id: str
+    factor: Literal[2, 3, 4, 6, 7, 11]
+    file: str
+    line: int = Field(ge=1)
+    evidence: str
+    description: str
+    source: Literal["llm"] = "llm"
+    confidence: Literal["needs_review"] = "needs_review"
+
+
 class EnvVar(OutputModel):
     name: str
     secret: bool = False
@@ -82,6 +93,7 @@ class Diagnosis(OutputModel):
     status: Literal["not_implemented", "completed"] = "not_implemented"
     support_grade: Literal["supported", "partial", "unsupported"] | None = None
     violations: list[Violation] = Field(default_factory=list)
+    review_candidates: list[ReviewCandidate] = Field(default_factory=list)
     signals: list[Signal] = Field(default_factory=list)
     warnings: list[WarningItem] = Field(default_factory=list)
     framework: FrameworkDetection | None = None
@@ -107,7 +119,7 @@ class Recommendation(OutputModel):
 
 class GateReport(OutputModel):
     status: Literal["not_run", "skipped", "passed", "failed"] = "not_run"
-    reason: str = "P0: 검증 게이트 미구현"
+    reason: str = "검증 게이트 미구현"
     runner: Literal["none", "fake", "docker"] = "none"
     transformed: GateExecution = Field(default_factory=GateExecution)
     original: GateExecution = Field(default_factory=GateExecution)

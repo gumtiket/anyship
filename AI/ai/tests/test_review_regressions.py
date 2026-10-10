@@ -90,8 +90,8 @@ def test_existing_database_url_is_user_secret_without_guessed_database(tmp_path)
         'engine=create_engine(os.environ["DATABASE_URL"])\n',
     )
     result = analyze(path, tmp_path / "out")
-    env = next(e for e in result.deploy_spec.env if e.name == "DATABASE_URL")
-    assert env.secret and not env.generate and env.value is None
+    assert all(e.name != "DATABASE_URL" for e in result.deploy_spec.env)
+    assert "environment_name_forbidden" in {w.code for w in result.transformation.warnings}
     assert not result.deploy_spec.backing_services
     assert "external_resource_required" in result.recommendation.needs_confirmation
 

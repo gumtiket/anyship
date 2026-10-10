@@ -1,7 +1,6 @@
-"""Service contract tests on all platforms, plus the actual offline AI pipeline on POSIX."""
+"""Service contract and actual offline AI pipeline tests on Windows and POSIX."""
 import hashlib
 import json
-import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
@@ -83,11 +82,8 @@ class BranchGitHub(AnalysisGitHub):
 
 @pytest.fixture(params=["contract", "pipeline"])
 def branch_web(database_url, monkeypatch, request):
-    if request.param == "pipeline" and sys.platform == "win32":
-        pytest.skip("Unchanged AI package requires POSIX fcntl.")
     if request.param == "contract":
         from tests.ai_contract_fixture import worker_response
-        monkeypatch.setattr("app.config.analysis_runtime_issue", lambda: None)
         monkeypatch.setattr(ai_analyses, "run_worker", worker_response)
     remote = BranchGitHub()
     with httpx.Client(transport=httpx.MockTransport(remote)) as transport:
@@ -283,8 +279,8 @@ def test_bedrock_missing_configuration_does_not_create_branch(branch_web, monkey
     assert not remote.writes
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Unchanged AI package requires POSIX fcntl.")
-def test_bedrock_provider_uses_ai_pipeline_without_container_gate(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_candidate", [False, True])
+def test_bedrock_provider_uses_ai_pipeline_without_container_gate(tmp_path, monkeypatch, with_candidate):
     import ai
     from ai.llm.fake import FakeLLMClient, recommendation_response
     from app.ai_worker import analyze
@@ -301,9 +297,12 @@ def test_bedrock_provider_uses_ai_pipeline_without_container_gate(tmp_path, monk
             target.write_bytes(path.read_bytes())
             manifest[name] = git_blob_sha(path.read_bytes())
     calls = []
+    candidates = [{"factor": 2, "file": "app/main.py", "line": 1,
+        "evidence": (source / "app/main.py").read_text(encoding="utf-8").splitlines()[0],
+        "description": "AI가 제안한 검토 후보"}] if with_candidate else []
     def client(**kwargs):
         calls.append(kwargs)
-        return FakeLLMClient({"diagnose": ['{"explanations":[],"candidates":[]}'],
+        return FakeLLMClient({"diagnose": [json.dumps({"explanations": [], "candidates": candidates})],
             "recommend": [recommendation_response], "transform": ['{"diff":"","violation_ids":[]}']})
     monkeypatch.setattr("ai.llm.bedrock.BedrockClient", client)
     original = ai.run_analysis
@@ -317,6 +316,12 @@ def test_bedrock_provider_uses_ai_pipeline_without_container_gate(tmp_path, monk
         "app_name": "app-test", "work_branch": "anyship/ai-test"})
     assert calls and result["result"]["llm_mode"] == "bedrock"
     assert result["result"]["gate"]["status"] == "skipped" and result["diff"]
+    diagnosis = result["result"]["diagnosis"]
+    assert len(diagnosis["review_candidates"]) == len(candidates)
+    candidate_ids = {item["id"] for item in diagnosis["review_candidates"]}
+    assert candidate_ids.isdisjoint(item["id"] for item in diagnosis["violations"])
+    transformation = result["result"]["transformation"]
+    assert candidate_ids.isdisjoint(transformation["addressed_ids"] + transformation["deferred_ids"])
 
 
 def test_publish_blocks_duplicate_commit_new_analysis_and_deletion(branch_web, monkeypatch):
@@ -345,7 +350,7 @@ def test_publish_blocks_duplicate_commit_new_analysis_and_deletion(branch_web, m
 def test_unavailable_analysis_runtime_blocks_new_branches_but_allows_saved_review_and_commit(branch_web, monkeypatch):
     _, client, remote, _, endpoint, _ = branch_web
     row = finished(branch_web, start_branch(branch_web).json()["id"])
-    monkeypatch.setattr("app.config.analysis_runtime_issue", lambda: "Linux 서비스 환경이 필요합니다.")
+    monkeypatch.setattr("app.config.find_spec", lambda name: None)
     config = client.get("/api/config").json()
     assert not config["ai_analysis_available"] and config["ai_runtime_issue"]
     count = len(remote.writes)

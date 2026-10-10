@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 import time
 from importlib.resources import files
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import yaml
 
 from ai.detectors import RepoView
+from ai.llm.anthropic import MODELS
 from ai.llm.recording import PlaybackError, assert_public, digest, write_json
 from ai.models import AnalysisResult, CostReport, Diagnosis, GateReport, Recommendation
 from ai.spec.models import DeploySpec
@@ -16,6 +18,7 @@ from ai.stages import Stage
 from ai.transform.service import identify_sample
 
 DEFAULT_CACHE = Path(__file__).resolve().parents[2] / "demo-cache"
+DEMO_ENVIRONMENTS = {"todo": "onprem", "todo-scheduler": "aws"}
 NAMES = (
     "diagnosis.json",
     "changes.diff",
@@ -84,18 +87,32 @@ def save_cache(
     settings: dict | None = None,
     allow_replay: bool = False,
     recorded_llm_usage: dict | None = None,
+    provider: str = "bedrock",
 ) -> Path:
     view = RepoView(repo)
     sample = identify_sample(view)
     replay = allow_replay and result.execution_source == "llm_replay"
+
+    def real_model(model: str) -> bool:
+        return (
+            model in MODELS
+            if provider == "anthropic"
+            else model.startswith(("global.anthropic.", "global.openai.", "us."))
+        )
+
     valid_calls = bool(result.cost.calls) and all(
-        call.model_id.startswith("replay:") and call.input_tokens == call.output_tokens == 0
+        (
+            call.model_id.startswith("replay:")
+            and call.input_tokens == call.output_tokens == 0
+            and real_model(call.model_id.removeprefix("replay:"))
+        )
         if replay
-        else call.model_id.startswith(("global.anthropic.", "global.openai.", "us."))
+        else real_model(call.model_id)
         for call in result.cost.calls
     )
     if (
         sample is None
+        or provider not in {"bedrock", "anthropic"}
         or result.gate_report.status != "passed"
         or result.gate_report.runner != "docker"
         or result.diagnosis.enrichment_status != "completed"
@@ -103,9 +120,13 @@ def save_cache(
         or not valid_calls
         or result.execution_source not in ({"llm_replay"} if replay else {"current_run"})
         or replay
-        and (result.cost.external_calls != 0 or not recorded_llm_usage)
+        and (
+            result.cost.external_calls != 0
+            or not recorded_llm_usage
+            or recorded_llm_usage.get("provider") != provider
+        )
     ):
-        raise ValueError("demo_cache_requires_actual_bedrock_and_docker_sample_result")
+        raise ValueError("demo_cache_requires_actual_provider_and_docker_sample_result")
     destination = root / sample
     source = view.root
     if root.resolve().is_relative_to(source) or source.is_relative_to(root.resolve()):
@@ -120,6 +141,7 @@ def save_cache(
     manifest = {
         "format_version": 1,
         "sample": sample,
+        "provider": provider,
         "code_hash": code_hash(repo),
         "engine_hash": engine_hash(),
         "settings": settings or settings_key(sample),
@@ -129,10 +151,10 @@ def save_cache(
         "result": snapshot,
         "events": events,
         "provenance": (
-            "Historical Bedrock responses replayed with identical request hashes; "
-            "current Docker sample gate; no new Bedrock calls"
+            f"Historical {provider} responses replayed with identical request hashes; "
+            "current Docker sample gate; no new provider calls"
             if replay
-            else "Actual Bedrock responses and Docker sample gate; historical result"
+            else f"Actual {provider} responses and Docker sample gate; historical result"
         ),
         "llm_execution_source": "llm_replay" if replay else "current_run",
         "recorded_llm_usage": recorded_llm_usage,
@@ -177,6 +199,7 @@ def try_restore(
         manifest = json.loads(manifest_path.read_text())
         if (
             manifest["format_version"] != 1
+            or manifest.get("provider", "bedrock") not in {"bedrock", "anthropic"}
             or manifest["sample"] != sample
             or manifest["code_hash"] != code_hash(repo)
             or manifest["engine_hash"] != engine_hash()
@@ -231,9 +254,11 @@ def try_restore(
         return None
     if not 0 <= delay_s <= 0.2:
         raise ValueError("cache_replay_delay_out_of_range")
-    log(Stage.ANALYZING, "(사전 실행 결과) 데모 캐시 재생 — 현재 Bedrock/Docker 호출 없음")
+    log(Stage.ANALYZING, "(사전 실행 결과) 데모 캐시 재생 — 현재 LLM/Docker 호출 없음")
     for stage, message in events:
         sleep(delay_s)
+        message = re.sub(r"^P\d+:\s*", "", message)
+        message = re.sub(r"^P\d+ 결과:", "게이트 결과:", message)
         log(stage, "(사전 실행 결과) " + message)
     result.execution_source = "demo_cache"
     result.build_context = None

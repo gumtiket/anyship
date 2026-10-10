@@ -41,9 +41,7 @@ def compare(baseline: Diagnosis, final: Diagnosis) -> dict[str, Any]:
         "signals_preserved": baseline.signals == final.signals,
         "factor_reviews_preserved": baseline.factor_reviews == final.factor_reviews,
         "explanation_changes": explanations,
-        "llm_candidates": [
-            v.model_dump(mode="json") for v in final.violations if v.source == "llm"
-        ],
+        "llm_candidates": [v.model_dump(mode="json") for v in final.review_candidates],
         "new_warnings": [
             w.model_dump(mode="json") for w in final.warnings if w not in baseline.warnings
         ],

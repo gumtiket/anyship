@@ -6,6 +6,7 @@ from packaging.utils import canonicalize_name
 from ai.detectors.repo import aliases, qualified
 from ai.models import Diagnosis, EnvVar, TransformReport, WarningItem
 from ai.security import DUMMY_SECRET, SourceMasker, credential_name, edit_nodes
+from ai.spec.env_policy import allowed_name
 from ai.transform.dockerfile import harden_dockerignore
 
 
@@ -100,6 +101,14 @@ def template_changes(
                     and node.value.value == DUMMY_SECRET
                 ):
                     key = targets[0].id.upper()
+                    if not allowed_name(key):
+                        report.warnings.append(
+                            WarningItem(
+                                code="environment_name_forbidden",
+                                message=f"{key}: C 예약 이름으로 추출할 수 없어 보류했습니다.",
+                            )
+                        )
+                        continue
                     edits.append((node.value, f'os.environ["{key}"]'))
                     required_imports.add("os")
                     environment[key] = EnvVar(

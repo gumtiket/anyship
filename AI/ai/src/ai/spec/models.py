@@ -1,3 +1,4 @@
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -6,9 +7,13 @@ from ai.credentials import credential_urls
 from ai.spec.env_policy import (
     APP_NAME,
     DENIED_NAMES,
+    DENIED_PREFIXES,
     ENV_NAME,
+    EXTERNAL_URLS,
     MAX_ENV_BYTES,
+    MAX_ENV_VALUE_CHARS,
     allowed_name,
+    allowed_value,
     known_env_bytes,
 )
 
@@ -55,7 +60,10 @@ class Environment(SpecModel):
         max_length=128,
         json_schema_extra={
             "not": {
-                "anyOf": [{"enum": sorted(DENIED_NAMES)}, {"pattern": "^(AWS_|DOCKER_|LAMBDA_)"}]
+                "anyOf": [
+                    {"enum": sorted(DENIED_NAMES | EXTERNAL_URLS)},
+                    {"pattern": "^(" + "|".join(re.escape(p) for p in DENIED_PREFIXES) + ")"},
+                ]
             }
         },
     )
@@ -63,8 +71,8 @@ class Environment(SpecModel):
     generate: bool = False
     value: str | None = Field(
         default=None,
-        max_length=4096,
-        json_schema_extra={"not": {"type": "string", "pattern": r"[\r\n\x00]"}},
+        max_length=MAX_ENV_VALUE_CHARS,
+        json_schema_extra={"not": {"type": "string", "pattern": r"[\r\n\x00']"}},
     )
 
     @model_validator(mode="after")
@@ -80,7 +88,7 @@ class Environment(SpecModel):
         if self.value is not None and (
             credential_urls(self.value)
             or len(self.value.encode()) > MAX_ENV_BYTES
-            or any(c in self.value for c in "\r\n\x00")
+            or not allowed_value(self.value)
         ):
             raise ValueError("environment_value_unsafe")
         return self
@@ -120,7 +128,12 @@ class Processes(SpecModel):
 
 
 class Release(SpecModel):
-    migrate: str
+    migrate: str = Field(
+        min_length=1,
+        max_length=500,
+        pattern=r"^[^\r\n\x00]*$",
+        json_schema_extra={"not": {"pattern": r"[\r\n\x00]"}},
+    )
 
 
 class DeploySpec(SpecModel):

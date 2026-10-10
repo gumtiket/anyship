@@ -1,7 +1,7 @@
 import os
 import re
-import sys
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlsplit
 from sqlalchemy.engine import make_url
@@ -12,9 +12,9 @@ DEFAULT_DATABASE_URL = "postgresql+psycopg://anyship@127.0.0.1:55432/anyship"
 
 
 def analysis_runtime_issue():
-    # The unchanged AI package imports POSIX-only fcntl at startup.
-    if sys.platform == "win32":
-        return "현재 서버에서는 새 AI 분석을 실행할 수 없습니다. 관리자가 Linux 환경에서 서비스를 실행해야 합니다. 기존 분석 이력과 검토한 수정안은 계속 확인·저장할 수 있습니다."
+    # The main-branch AI pipeline supports no_gate on Windows as well as POSIX.
+    if find_spec("ai") is None:
+        return "AI 분석 패키지가 설치되지 않았습니다. 관리자가 서비스 의존성을 설치해야 합니다. 기존 분석 이력과 검토한 수정안은 계속 확인·저장할 수 있습니다."
     return None
 
 
@@ -35,6 +35,7 @@ class Settings:
     aws_service_role_arn: str = ""
     aws_regions: tuple[str, ...] = ()
     aws_role_name: str = "deploy-service-role"
+    aws_verify: str = ""  # "sts"면 환경 등록의 연결 확인에 STSAdapter를 쓴다. 기본은 꺼짐(어댑터 연결 대기)
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
 
@@ -48,6 +49,8 @@ class Settings:
         validate_aws_settings(self.aws_template_url, self.aws_service_role_arn, self.aws_regions)
         if not re.fullmatch(r"[A-Za-z0-9_+=,.@-]{1,64}", self.aws_role_name.replace("{id}", "0" * 32)):
             raise ValueError("APP_AWS_ROLE_NAME must be an IAM role name, optionally containing {id}.")
+        if self.aws_verify not in ("", "sts"):
+            raise ValueError("APP_AWS_VERIFY must be empty or sts.")
         if self.ai_mode not in ("placeholder", "unavailable", "fake", "bedrock"):
             raise ValueError("APP_AI_MODE must be placeholder, fake, bedrock or unavailable.")
         if self.production and self.ai_mode in ("placeholder", "fake"):
@@ -110,4 +113,5 @@ class Settings:
             aws_service_role_arn=os.getenv("APP_AWS_SERVICE_ROLE_ARN", "").strip(),
             aws_regions=tuple(dict.fromkeys(r.strip() for r in os.getenv("APP_AWS_REGIONS", "").split(",") if r.strip())),
             aws_role_name=os.getenv("APP_AWS_ROLE_NAME", "deploy-service-role").strip(),
+            aws_verify=os.getenv("APP_AWS_VERIFY", "").strip().lower(),
         )

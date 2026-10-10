@@ -4,9 +4,10 @@ import { api, mutation } from './api';
 
 type Warning = { code: string; message: string };
 type Finding = { id: string; file: string; line: number; evidence: string; description?: string; rule: string; change_class: string };
+type ReviewCandidate = { id: string; file: string; line: number; evidence: string; description: string };
 type Result = {
   analysis_status: string; llm_mode: string; execution_source: string;
-  diagnosis: { support_grade: string; framework?: { reason: string }; violations: Finding[]; warnings: Warning[] };
+  diagnosis: { support_grade: string; framework?: { reason: string }; violations: Finding[]; review_candidates?: ReviewCandidate[]; warnings: Warning[] };
   transformation: { status: string; needs_approval: boolean; addressed_ids: string[]; deferred_ids: string[]; warnings: Warning[] };
   recommendation: { set?: string; rationale?: string; estimated_monthly_cost?: number | null; needs_confirmation: string[]; assumptions: string[] };
   gate: { status: string; pr_eligible: boolean; historical_status?: string; reason: string };
@@ -120,6 +121,7 @@ export function AIAnalysis({ projectId, csrf, repository, sourceBranch, aiMode, 
       {result.transformation.needs_approval && <p className="ai-notice">위험한 변경이 포함되어 있습니다. 전체 diff와 보류 사항을 확인한 뒤 검토를 완료해 주세요.</p>}
       {warnings.length > 0 && <details open><summary>주의·보류 사항 {warnings.length}건</summary><ul>{warnings.map(w => <li key={w.code}>{w.message} <small className="quiet">({w.code})</small></li>)}</ul></details>}
       <details open><summary>진단 항목 {result.diagnosis.violations.length}건</summary>{result.diagnosis.violations.map(v => <article className="ai-finding" key={v.id}><strong>{v.description || v.rule}</strong><p><code>{v.file}:{v.line}</code> · {v.change_class === 'risky' ? '위험 변경' : '일반 변경'} · {result.transformation.addressed_ids.includes(v.id) ? '수정안 반영' : '보류'}</p><pre>{v.evidence}</pre></article>)}</details>
+      {!!result.diagnosis.review_candidates?.length && <details open><summary>AI 검토 후보 {result.diagnosis.review_candidates.length}건</summary><p>AI가 제안한 확인 대상입니다. 확정된 진단이나 자동 수정 완료 항목으로 집계하지 않습니다.</p>{result.diagnosis.review_candidates.map(candidate => <article className="ai-finding" key={candidate.id}><strong>{candidate.description}</strong><p><code>{candidate.file}:{candidate.line}</code> · 검토 필요</p><pre>{candidate.evidence}</pre></article>)}</details>}
       <details><summary>배포 추천·비용</summary><p>{result.recommendation.set || '추천 없음'} · {result.recommendation.rationale}</p><p>인프라 비용: {result.recommendation.estimated_monthly_cost == null ? '미확정' : `$${result.recommendation.estimated_monthly_cost}/월 (임시 추정치)`}</p><p>추가 확인: {result.recommendation.needs_confirmation.join(', ') || '없음'}</p><ul>{result.recommendation.assumptions.map((v, i) => <li key={i}>{v}</li>)}</ul><p>모델 응답: {result.llm_mode === 'fake' ? 'Fake' : 'Bedrock'} · 출처: {result.execution_source} · {result.cost.historical ? '과거' : '현재'} 모델 사용 비용: {result.cost.total.cost_usd == null ? '미확정' : `$${result.cost.total.cost_usd}`}</p><p>토큰: 입력 {result.cost.total.input_tokens} / 출력 {result.cost.total.output_tokens}</p></details>
       {!!job?.diff && <div className="ai-bundle"><h3><FileCode2 size={17}/> 전체 수정안</h3><p>연관된 파일을 함께 검토합니다. 개별 진단 항목별 선택은 아직 지원하지 않습니다.</p><ul>{result.bundle.paths.map(path => <li key={path}><code>{path}</code></li>)}</ul><pre className="change-diff" aria-label="AI 코드 변경 내용">{job.diff}</pre>
         {['reviewed', 'publishing', 'published', 'publish_failed'].includes(job.status) ? <p className="workflow-verification"><Check size={16}/> 전체 수정안 검토 완료</p> : job.review_hash && <><label className="review-check"><input type="checkbox" checked={selected} disabled={waiting || !enabled} onChange={e => setSelected(e.target.checked)}/><span>전체 수정안 묶음을 선택하고 변경 내용과 위험·보류 사항을 확인했습니다.</span></label><button className="primary" disabled={waiting || !selected || !enabled} onClick={review}>전체 수정안 검토 완료</button></>}

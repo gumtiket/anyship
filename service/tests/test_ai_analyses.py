@@ -1,7 +1,6 @@
 """Real fake-AI pipeline with GitHub HTTP fixtures and isolated database only."""
 import base64
 import json
-import sys
 import time
 import uuid
 from dataclasses import replace
@@ -56,8 +55,6 @@ class AnalysisGitHub(GitHubHTTP):
 
 @pytest.fixture
 def fake_web(database_url, monkeypatch):
-    if sys.platform == "win32":
-        pytest.skip("Unchanged AI package requires POSIX fcntl; Service contract tests run separately.")
     remote = AnalysisGitHub()
     with httpx.Client(transport=httpx.MockTransport(remote)) as transport:
         monkeypatch.setattr(httpx, "request", transport.request)
@@ -93,6 +90,7 @@ def finished(web, identifier):
 
 def test_real_fake_pipeline_snapshot_review_history_and_no_remote_writes(fake_web):
     app, client, remote, headers, endpoint, settings = fake_web
+    assert client.get("/api/config").json()["ai_analysis_available"]
     identifier = str(uuid.uuid4())
     response = start(fake_web, identifier)
     assert response.status_code == 202

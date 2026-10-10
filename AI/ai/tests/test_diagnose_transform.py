@@ -74,7 +74,7 @@ def test_llm_cannot_delete_rule_findings_change_factors_or_signals():
                 "factor": 3,
                 "file": "app/main.py",
                 "line": 1,
-                "evidence": "검토 후보",
+                "evidence": repo.read("app/main.py").splitlines()[0],
                 "description": "추가 확인",
             },
         ],
@@ -85,9 +85,9 @@ def test_llm_cannot_delete_rule_findings_change_factors_or_signals():
     assert result.violations[0].description == "설명"
     assert {v.id for v in original.violations} <= {v.id for v in result.violations}
     assert result.signals == original.signals
-    assert result.violations[-1].source == "llm"
-    assert result.violations[-1].confidence == "needs_review"
-    assert not result.violations[-1].auto_fixable
+    assert {v.id for v in original.violations} == {v.id for v in result.violations}
+    assert result.review_candidates[-1].source == "llm"
+    assert result.review_candidates[-1].confidence == "needs_review"
     assert "dummy-secret-do-not-use" not in fake.calls[0].user
     assert "VIOLATIONS.json" not in fake.calls[0].user
 
@@ -379,17 +379,26 @@ def test_llm_patch_rejects_unrequested_behavior(tmp_path, extra, expected):
     assert expected in fake.calls[1].user
 
 
-def test_llm_cannot_claim_a_violation_fixed_when_only_comment_changes(tmp_path):
+@pytest.mark.parametrize(
+    "comment,expected_error",
+    [
+        ("\n# no actual fix\n", "patch_scope_violation"),
+        (" # no actual fix\n", "requested_violation_unresolved"),
+    ],
+)
+def test_llm_cannot_claim_a_violation_fixed_when_only_comment_changes(
+    tmp_path, comment, expected_error
+):
     repo = small_repo(tmp_path, 'import uvicorn\nuvicorn.run("main:app",port=8000)\n')
     before = source_files(repo)
     target = next(v for v in detect(repo) if v.rule == "fixed_port")
-    after = {"main.py": before["main.py"] + "# no actual fix\n"}
+    after = {"main.py": before["main.py"].rstrip("\n") + comment}
     fake = FakeLLMClient(
         [json.dumps({"diff": make_diff(before, after), "violation_ids": [target.id]})] * 4
     )
     result, ids, _, _ = llm_patch(before, [target], fake, SourceMasker(repo))
     assert result == before and not ids
-    assert "requested_violation_unresolved" in fake.calls[1].user
+    assert expected_error in fake.calls[1].user
 
 
 def test_compile_failure_returns_failed_result_and_no_accepted_changes(tmp_path):
