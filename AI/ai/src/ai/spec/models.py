@@ -57,7 +57,7 @@ class Environment(SpecModel):
     )
     name: str = Field(
         pattern=ENV_NAME,
-        max_length=128,
+        max_length=64,
         json_schema_extra={
             "not": {
                 "anyOf": [

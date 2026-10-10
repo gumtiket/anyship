@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from .config import Settings
 from .db import CodeChange, DemoChange, LoginSession, Membership, OAuthAttempt, Project, RepositoryConnection, User, Workspace, database
 from .github_api import DemoGitHub, GitHubAPI, GitHubFailure
-from . import aws_onboarding, code_changes, deploy_api, demo_changes, deployments, mock_deployments, onboarding
+from . import analyses, analysis_api, aws_onboarding, code_changes, deploy_api, demo_changes, deployments, mock_deployments, onboarding
 from .aws_adapter import AwsAdapter
 
 auth_logger = logging.getLogger("anyship.auth")
@@ -49,10 +49,14 @@ class DemoReviewInput(BaseModel):
     review_hash: str = Field(min_length=64, max_length=64)
 
 
-def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None = None, deploy_runner=None):
+def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None = None, deploy_runner=None, ai_provider=None):
     engine, sessions = database(settings.database_url)
     cipher = Fernet(settings.token_key.encode() if settings.token_key else Fernet.generate_key())
     github = gateway or (DemoGitHub() if settings.demo else GitHubAPI())
+    analysis_runner = None
+    if settings.ai_mode == "bronze":
+        from .analysis_runner import AnalysisRunner
+        analysis_runner = AnalysisRunner(settings, sessions, github, provider=ai_provider)
     mock_runner = mock_deployments.MockRunner(settings, sessions) if settings.deployment_mode == "mock" else None
     if deploy_runner is None and settings.deployment_mode == "real":
         from .deploy_runner import DeployRunner  # 실제 모드에서만 불러온다
@@ -65,8 +69,12 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
                 mock_runner.start()
             if deploy_runner:
                 deploy_runner.start()
+            if analysis_runner:
+                analysis_runner.start()
             yield
         finally:
+            if analysis_runner:
+                analysis_runner.close()
             if deploy_runner:
                 deploy_runner.close()
             if mock_runner:
@@ -78,6 +86,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
     app.state.sessions = sessions
     app.state.mock_runner = mock_runner
     app.state.deploy_runner = deploy_runner
+    app.state.analysis_runner = analysis_runner
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request, error):
@@ -188,7 +197,8 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
                 "aws_verification_available": settings.aws_configured and aws_adapter is not None,
                 "aws_regions": list(settings.aws_regions),
                 "aws_setup_issues": settings.aws_setup_issues,
-                "ai_available": False, "ai_mode": settings.ai_mode, "demo_changes_available": settings.demo,
+                "ai_available": settings.ai_mode == "bronze", "ai_mode": settings.ai_mode,
+                "ai_provider": settings.ai_provider, "demo_changes_available": settings.demo,
                 "deployment_mode": settings.deployment_mode,
                 "callback_url": settings.app_origin + "/api/auth/github/callback"}
 
@@ -323,6 +333,7 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
             raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
         mock_deployments.clear_targets(session, project_id=project_id)
         deployments.clear_real_targets(session, project_id=project_id)
+        analyses.clear_project(session, project_id)
         # Conditional deletes compete with workflow claims on the same rows.
         # Keep all changes in one transaction so a busy child rolls back cleanup.
         session.execute(delete(CodeChange).where(
@@ -382,6 +393,9 @@ def create_app(settings: Settings, gateway=None, aws_adapter: AwsAdapter | None 
         if installation.get("suspended_at") or any(permissions.get(key) != "write" for key in ("contents", "pull_requests")):
             raise HTTPException(403, "GitHub App의 Contents와 Pull requests를 Read and write로 설정하고 설치 권한을 승인해 주세요.")
         return project
+
+    app.include_router(analysis_api.router(settings, analysis_runner, github, db, current, mutation,
+                                          owned_project, real_project, access_token))
 
     def change_json(row):
         if not row:

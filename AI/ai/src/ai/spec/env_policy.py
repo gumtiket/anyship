@@ -2,7 +2,7 @@
 
 import re
 
-ENV_NAME = r"^[A-Z][A-Z0-9_]+$"
+ENV_NAME = r"^[A-Z][A-Z0-9_]{1,63}$"
 APP_NAME = r"^[a-z][a-z0-9-]{1,29}[a-z0-9]$"
 MAX_ENV_BYTES = 4096
 MAX_ENV_VALUE_CHARS = 1024
@@ -12,6 +12,10 @@ DENIED_NAMES = frozenset(
         "PORT",
         "PATH",
         "HOME",
+        "USER",
+        "SHELL",
+        "PWD",
+        "HOSTNAME",
         "LD_PRELOAD",
         "LD_LIBRARY_PATH",
         "PYTHONPATH",

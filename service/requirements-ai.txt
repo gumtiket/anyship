@@ -1,0 +1,4 @@
+# Optional AI engine, from service/ with Python 3.12+.
+# The web runtime must already be installed (requirements.txt / requirements-dev.txt).
+-e ../AI/ai
+# For Anthropic instead of Bedrock, additionally install ../AI/ai[anthropic].
