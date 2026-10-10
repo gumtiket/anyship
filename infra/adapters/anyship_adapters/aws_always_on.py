@@ -18,6 +18,7 @@ from .base import LogFn
 from .compose import render_stack
 from .compose_adapter import ComposeAdapter, _err, _ssh_error, _step
 from .compose_host import ComposeHost, wait_healthy
+from .data_transfer import RdsDbEndpoint, TransferInputError
 from .models import (AdapterError, AwsEnvironment, CheckResult, DeployResult, DestroyResult, LogEvent, Secrets,
                      Spec, StatusResult)
 from .rds_admin import database_url, db_name, ensure_app_database, password_from_url
@@ -48,6 +49,14 @@ class AwsAlwaysOnAdapter(ComposeAdapter):
 
     def _address(self, env: AwsEnvironment, app: str) -> str:
         return f"{app}.{env.env_id}.aws.{self._domain}"
+
+    def data_endpoint(self, env: AwsEnvironment, app: str) -> RdsDbEndpoint:
+        """앱의 DB(공용 RDS 안의 앱 전용 DB)에 닿는 방법. 호스트가 있어야 한다. 데이터 이전이 쓴다."""
+        error = foundation_error(env, _HOST_ONLY)
+        if error:
+            raise TransferInputError(error)
+        ssh, host = self._connect(env)
+        return RdsDbEndpoint(ssh, host, app)
 
     def check(self, env: AwsEnvironment, log: LogFn) -> CheckResult:
         total = 5

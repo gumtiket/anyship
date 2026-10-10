@@ -125,6 +125,13 @@ class ComposeHost:
             raise ValueError("invalid image reference")
         return self._ssh.run(["docker", "image", "inspect", "--format", "{{.Id}}", image]).ok
 
+    def stop_service(self, app: str, service: str = "web", *, timeout: float = 60) -> CommandResult:
+        """앱 컨테이너 하나만 멈춘다(컨테이너와 볼륨은 지우지 않는다). 데이터를 옮기는 동안 쓰기를 막으려는 용도다."""
+        if service not in ("web", "db"):
+            raise ValueError("invalid service")
+        return self._ssh.run(["docker", "compose", "--project-directory", self._app_dir(app), "stop", service],
+                             timeout=timeout)
+
     def down(self, app: str, *, timeout: float = 120) -> CommandResult:
         """컨테이너, 네트워크, DB 볼륨(데이터)을 모두 지운다."""
         return self._ssh.run(["docker", "compose", "--project-directory", self._app_dir(app),

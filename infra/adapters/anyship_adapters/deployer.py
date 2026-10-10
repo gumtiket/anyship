@@ -21,11 +21,12 @@ from typing import Any, Mapping
 
 from .base import Adapter, LogFn
 from .compose import render_stack
+from .data_transfer import DEFAULT_MAX_BYTES, TransferInputError, transfer_database
 from .dns import DnsError, WildcardRecords
 from .foundation import FoundationSettings, ensure_foundation
 from .image_builder import BuildError, ImageBuilder
-from .models import (IMAGE_TAG_PATTERN, AdapterError, CheckResult, DeployResult, DestroyResult, Environment, LogEvent, Secrets,
-                     Spec, StatusResult)
+from .models import (APP_NAME_PATTERN, IMAGE_TAG_PATTERN, AdapterError, CheckResult, DeployResult, DestroyResult, Environment, LogEvent, Secrets,
+                     Spec, StatusResult, TransferResult)
 from .rds_admin import db_name
 from .redact import make_safe_log, redact_json, redact_model
 from .sets import AWS_ALWAYS_ON, AWS_SERVERLESS, ONPREM, SetName
@@ -33,6 +34,7 @@ from .spec import SpecError, parse_spec
 from .terraform_runner import TerraformError, TerraformRunner
 
 _TAG = re.compile(IMAGE_TAG_PATTERN)
+_APP = re.compile(APP_NAME_PATTERN)
 SET_KINDS = {AWS_ALWAYS_ON: "aws", AWS_SERVERLESS: "aws", ONPREM: "onprem"}  # 세트가 쓸 수 있는 환경 종류
 _STAGES = {
     "aws": (("build", "이미지 빌드"), ("foundation", "공용 기반 확인"), ("check", "연결 확인"), ("deploy", "배포"),
@@ -199,6 +201,37 @@ class Deployer:
         except Exception:
             return DeployResult(ok=False, error=AdapterError(code="rollback_pipeline_error",
                 message="롤백을 완료하지 못했습니다.", retryable=True))
+
+    def transfer_data(self, source_env: Environment, target_env: Environment, app: str, log: LogFn, *,
+                      source_set: SetName, target_set: SetName, max_bytes: int = DEFAULT_MAX_BYTES) -> TransferResult:
+        """앱의 DB를 한 환경에서 다른 환경으로 옮긴다(예: 온프레미스에서 AWS로). DB만 옮기고 볼륨의 파일과 생성된 비밀은 옮기지 않는다.
+
+        대상 환경에는 같은 앱이 먼저 배포되어 있어야 한다. 성공하면 원본 앱은 멈춘 채로 남는다(확인한 뒤 사용자가 지운다).
+        실패하면 멈춘 앱을 모두 되돌린다. 로그는 큰 단계 하나("데이터 이전")로 정리된다."""
+        adapter, refused, channels = self._entry(source_env, source_set, "데이터 이전", log)
+        if adapter is None:
+            return TransferResult(ok=False, error=refused)
+        target_adapter = self._adapters.get(target_set)
+        if target_adapter is None or SET_KINDS.get(target_set) != target_env.kind:
+            return TransferResult(ok=False, error=AdapterError(
+                code="set_not_supported", message=f"대상 환경에서는 '{target_set}' 세트를 사용할 수 없습니다."))
+        if not _APP.match(app):
+            return TransferResult(ok=False, error=AdapterError(code="invalid_spec", message="앱 이름 형식이 올바르지 않습니다."))
+        if source_set == target_set and source_env == target_env:
+            return TransferResult(ok=False, error=AdapterError(
+                code="same_environment", message="원본과 대상이 같은 환경입니다.", hint="다른 환경을 대상으로 선택해 주세요."))
+        if not (hasattr(adapter, "data_endpoint") and hasattr(target_adapter, "data_endpoint")):
+            return TransferResult(ok=False, error=AdapterError(
+                code="transfer_not_supported", message="이 환경 조합은 데이터 이전을 지원하지 않습니다."))
+        try:
+            source_endpoint = adapter.data_endpoint(source_env, app)
+            target_endpoint = target_adapter.data_endpoint(target_env, app)
+            return redact_model(transfer_database(source_endpoint, target_endpoint, channels[1], max_bytes=max_bytes))
+        except TransferInputError as exc:
+            return TransferResult(ok=False, error=redact_model(exc.error))
+        except Exception:
+            return TransferResult(ok=False, error=AdapterError(
+                code="transfer_pipeline_error", message="데이터를 옮기지 못했습니다.", retryable=True))
 
     def destroy(self, env: Environment, app: str, log: LogFn, *, set_name: SetName) -> DestroyResult:
         """배포한 앱을 지운다(컨테이너, 볼륨, 앱 디렉터리). 앱 DB와 공용 기반, DNS 레코드는 남긴다.
