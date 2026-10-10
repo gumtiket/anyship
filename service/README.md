@@ -2,6 +2,8 @@
 
 AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안내](../docs/LOCAL_DEVELOPMENT.md)를 참고하세요. 아래는 AWS 환경 등록 API와 독립적으로 사용할 수 있는 GitHub 모듈의 안내입니다.
 
+AI 분석·다중 파일 변경안 검토·Draft PR 흐름은 `APP_AI_MODE=bronze`로 활성화합니다. Python 3.12 이상에서 `requirements-dev.txt`를 설치하고 `alembic upgrade head`로 `0009`를 적용하세요. 제공자 설정과 검증 범위는 [AI 통합 안내](../docs/AI_INTEGRATION.md)를 참고하세요.
+
 ## Mock 어댑터로 배포 흐름 시험하기
 
 Infra의 `MockAdapter`를 사용하는 개발 전용 기능입니다. 실제 AWS·SSH·GitHub 배포 요청이나 이미지 빌드를 하지 않으며, 기존 AWS의 검증된 연결 상태도 바꾸지 않습니다.

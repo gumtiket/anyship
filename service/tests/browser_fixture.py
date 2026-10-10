@@ -4,6 +4,7 @@ Run from service: python -m tests.browser_fixture
 Open http://127.0.0.1:8001/_test_only/login. Never used by app.main or launch scripts.
 --deploy: real deployment screen with a fake source/deployer (no AWS, no Docker); jobs take a few seconds.
          /_test_only/fail-next-destroy makes the next removal fail once (to see the error screen).
+--ai: real AI subprocess with a fake model and GitHub; never makes paid calls or remote writes.
 """
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -88,7 +89,14 @@ def seed_environment(app, client):
 
 def main():
     with TemporaryDirectory(prefix="anyship-browser-test-") as directory:
-        fixture = GitHubHTTP()
+        ai = "--ai" in sys.argv
+        if ai:
+            from .test_ai_integration import AnalysisGitHub
+            sample = Path(__file__).resolve().parents[2] / "AI/samples/todo"
+            fixture = AnalysisGitHub({p.relative_to(sample).as_posix(): p.read_bytes().decode().replace("\r\n", "\n")
+                                     for p in sample.rglob("*") if p.is_file()})
+        else:
+            fixture = GitHubHTTP()
         onboarding = "--onboarding" in sys.argv
         mock = "--mock" in sys.argv
         deploy = "--deploy" in sys.argv
@@ -103,7 +111,8 @@ def main():
             app = create_app(Settings(
                 app_origin="http://127.0.0.1:8001", database_url=database_url,
                 token_key=Fernet.generate_key().decode(), github_client_id="fixture",
-                github_client_secret="fixture", github_app_slug="fixture", ai_mode="placeholder",
+                github_client_secret="fixture", github_app_slug="fixture", ai_mode="bronze" if ai else "placeholder",
+                ai_provider="fake", ai_workspace=Path(directory) / "ai",
                 deployment_mode="mock" if mock else "real" if deploy else "unavailable", mock_step_delay=0.15, **real,
             ), deploy_runner=runner)
             Base.metadata.create_all(app.state.engine)
@@ -145,7 +154,7 @@ def main():
                 cookie = client.cookies.get("app_session")
                 if deploy:
                     seed_environment(app, client)
-                if mock or deploy:
+                if mock or deploy or ai:
                     project = client.post("/api/projects", json={"repository_url": "https://github.com/owner/real-repo", "branch": "main"},
                         headers={"Origin": "http://127.0.0.1:8001", "X-CSRF-Token": client.get("/api/me").json()["csrf_token"]})
                     assert project.status_code == 201, project.text

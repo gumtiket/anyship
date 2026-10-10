@@ -1,6 +1,6 @@
 # AnyShip 로컬 실행 및 실제 GitHub 테스트
 
-AnyShip은 GitHub 로그인 → 저장소 URL 등록 → 수정 항목 등록·실행 → diff 검토 → 실제 GitHub Draft PR 생성을 제공합니다. 현재 AI만 임시 구현입니다. `APP_AI_MODE=placeholder`로 실행하면 `anyship_ai_placeholder.py`에 AI 미연결 안내 주석을 추가합니다. 가짜 로그인·저장소·PR로 대체하지 않습니다.
+AnyShip은 GitHub 로그인 → 저장소 URL 등록 → 수정 항목 등록·실행 → diff 검토 → 실제 GitHub Draft PR 생성을 제공합니다. 실제 AI 통합은 `APP_AI_MODE=bronze`로 활성화하며 [설정 안내](AI_INTEGRATION.md)를 따릅니다. 기본 로컬 프로필은 기존 임시 모드를 유지합니다. `APP_AI_MODE=placeholder`로 실행하면 `anyship_ai_placeholder.py`에 AI 미연결 안내 주석을 추가합니다. 가짜 로그인·저장소·PR로 대체하지 않습니다.
 
 ## 이 PC에서 실행
 
@@ -117,7 +117,7 @@ APP_DATABASE_URL=
 # APP_TOKEN_KEY는 실행 스크립트가 생성합니다. 기존 키를 교체하면 재로그인이 필요합니다.
 ```
 
-`APP_AI_MODE=unavailable`이면 AI 작업을 차단합니다. 실제 AI 제공자가 구현되기 전에는 운영 환경에서 임시 분석 기능을 사용할 수 없습니다. 이전 데모 DB와 실제 GitHub DB는 분리하여 기존 샘플 계정이 실제 작업에 사용되지 않게 합니다. 예전 `-Mode demo` 실행은 지원하지 않으며 기본 실행은 GitHub 모드입니다. 이전 데이터 보존을 위해 데모 테이블과 격리된 레거시 API는 남아 있지만 AnyShip 화면에서는 사용하지 않습니다.
+`APP_AI_MODE=unavailable`이면 AI 작업을 차단합니다. 운영에서는 placeholder와 모의 AI 제공자를 사용할 수 없습니다. 실제 엔진은 `APP_AI_MODE=bronze`와 제공자 설정으로 활성화합니다. 이전 데모 DB와 실제 GitHub DB는 분리하여 기존 샘플 계정이 실제 작업에 사용되지 않게 합니다. 예전 `-Mode demo` 실행은 지원하지 않으며 기본 실행은 GitHub 모드입니다. 이전 데이터 보존을 위해 데모 테이블과 격리된 레거시 API는 남아 있지만 AnyShip 화면에서는 사용하지 않습니다.
 
 Python 3.12 이상, Node.js 22 이상, pnpm과 PostgreSQL 실행 파일을 준비한 새 환경에서는 다음을 실행합니다.
 

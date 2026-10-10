@@ -43,6 +43,11 @@ def repo(tmp_path, source):
         "STORAGE_URL",
         "PATH",
         "HOME",
+        "USER",
+        "SHELL",
+        "PWD",
+        "HOSTNAME",
+        "A" * 65,
     ],
 )
 def test_c_reserved_names_rejected_by_model_and_schema(name):
