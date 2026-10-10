@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ExternalLink, GitPullRequest, LoaderCircle, Sparkles } from 'lucide-react';
 import { mutation } from './api';
+import { FileDiffViewer } from './FileDiffViewer';
 
 type Finding = { id: string; factor: number; file: string; line: number; evidence: string; description?: string; rule?: string; change_class?: string };
 type Warning = { code: string; message: string };
@@ -131,7 +132,7 @@ export function AnalysisWorkflow({ projectId, csrf, provider, request, onError }
       {cost && <p className="small quiet">모델 비용: {cost.total.cost_usd == null ? '일부 비용 미확인' : `$${cost.total.cost_usd.toFixed(6)}`} · 외부 호출: {cost.external_calls ?? '미집계'}{!cost.total.usage_complete || !cost.total.pricing_complete ? ' · 집계 불완전' : ''}{cost.historical ? ' · 과거 실행 비용' : ''}</p>}
       {!!report?.source_skipped_files && <p className="small quiet">분석에서 제외된 파일: {report.source_skipped_files}개</p>}
       {warnings.length > 0 && <details><summary>분석 경고 {warnings.length}개</summary><ul>{warnings.map((w, i) => <li key={i}>{w.code}: {w.message}</li>)}</ul></details>}
-      {run.files.length > 0 && <><h3>변경안 전체 · {run.files.length}개 파일</h3><p className="small quiet">{run.files.map(file => file.path).join(' · ')}</p><pre className="change-diff" aria-label="전체 변경안">{run.diff}</pre></>}
+      {run.files.length > 0 && <><h3>변경안 전체 · {run.files.length}개 파일</h3><FileDiffViewer key={`${run.id}:${run.review_hash}`} diff={run.diff}/></>}
       {run.status === 'completed' && run.files.length === 0 && <p>게시할 변경안이 없습니다. 진단 결과와 경고를 확인해 주세요.</p>}
       {publishable && run.publish_status !== 'pr_created' && <>
         <label className="review-check"><input type="checkbox" checked={reviewed} disabled={waiting} onChange={e => setReviewed(e.target.checked)}/><span>전체 변경안을 검토했습니다. 연결된 GitHub 저장소에 브랜치·커밋과 Draft PR을 생성합니다.</span></label>

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, ExternalLink, LoaderCircle, Plus, RefreshCw, Rocket, X } from 'lucide-react';
 import { api, mutation } from './api';
 import { DeleteRegistration } from './DeleteRegistration';
+import { DeploymentLogs } from './DeploymentLogs';
 import './mock-deployment.css';
 import './deployment.css';
 
@@ -186,9 +187,7 @@ export function Deployment({ projectId, csrf, mode, onError }: {
             {job.result.error && <div className="error" role="alert"><div>{job.result.error.message}{job.result.error.hint && <small>{job.result.error.hint}</small>}</div></div>}
             {job.status === 'succeeded' && job.action === 'destroy' && <p>배포를 제거했습니다. 앱 DB와 공용 기반은 남아 있습니다.</p>}
             {job.status === 'succeeded' && job.action !== 'destroy' && job.result.url && <p>배포 완료: <a className="deploy-url" href={job.result.url} target="_blank" rel="noopener noreferrer">{job.result.url} <ExternalLink size={13}/></a></p>}
-            <ol className="mock-logs">{job.logs.map((entry, index) => <li key={index} className={entry.level === 'error' ? 'is-error' : entry.level === 'warn' ? 'is-warn' : ''}>
-              <span>{entry.total ? `${entry.step}/${entry.total}` : '·'}</span><div>{entry.name && <strong>{entry.name}</strong>}<p>{entry.message}</p></div>
-            </li>)}</ol>
+            <DeploymentLogs key={job.id} logs={job.logs}/>
             {job.status === 'queued' && <p>작업 순서를 기다리고 있습니다.</p>}
           </div>}
         </>}
