@@ -19,6 +19,7 @@ from pathlib import Path
 from anyship_adapters import AdapterError, DeployResult, redact_event, redact_model
 from anyship_adapters.aws_always_on import AwsAlwaysOnAdapter
 from anyship_adapters.deployer import Deployer
+from anyship_adapters.dns import WildcardRecords
 from anyship_adapters.foundation import FoundationSettings
 from anyship_adapters.image_builder import ImageBuilder
 from anyship_adapters.terraform_runner import TerraformRunner
@@ -112,7 +113,10 @@ class DeployRunner:
         runner = TerraformRunner(settings.deploy_terraform_dir, plugin_cache_dir=settings.deploy_plugin_cache)
         foundation = FoundationSettings(settings.deploy_service_ip, _public_key(settings.deploy_ssh_key),
                                         settings.deploy_acme_email)
-        deployer = Deployer({"aws-always-on": adapter}, ImageBuilder(timeout=900), runner=runner, foundation=foundation)
+        # 서비스 서버 역할로 Route 53의 이 도메인에서 *.<환경ID>.aws.<도메인> 레코드만 바꾼다. 끄면 사람이 직접 맞춘다.
+        dns = WildcardRecords(scope="aws", base_domain=settings.deploy_base_domain) if settings.deploy_dns else None
+        deployer = Deployer({"aws-always-on": adapter}, ImageBuilder(timeout=900), runner=runner, foundation=foundation,
+                            dns=dns)
         return cls(settings, sessions, source=LocalFolderSource(settings.deploy_source_dir), deployer=deployer)
 
     def start(self) -> None:

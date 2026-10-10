@@ -38,6 +38,7 @@ class Settings:
     deploy_terraform_dir: Path = Path(__file__).resolve().parents[2] / "infra" / "user-account"
     deploy_plugin_cache: Path = Path.home() / ".terraform.d" / "plugin-cache"
     deploy_verify_tls: bool = True  # False는 Let's Encrypt staging 인증서를 시험할 때만
+    deploy_dns: bool = True  # False면 앱 주소의 DNS 레코드(*.<환경ID>.aws.<도메인>)를 서비스가 맞추지 않는다(수동으로 관리)
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
 
@@ -138,7 +139,10 @@ class Settings:
             value = os.getenv(name, "").strip()
             return Path(value).expanduser() if value else None
 
-        values = {"deploy_source_dir": path("APP_DEPLOY_SOURCE_DIR"), "deploy_ssh_key": path("APP_DEPLOY_SSH_KEY"),
+        dns = os.getenv("APP_DEPLOY_DNS", "").strip().lower() or "on"  # 비워 두면 기본값
+        if dns not in ("on", "off"):
+            raise ValueError("APP_DEPLOY_DNS must be on or off.")
+        values = {"deploy_source_dir": path("APP_DEPLOY_SOURCE_DIR"), "deploy_dns": dns == "on", "deploy_ssh_key": path("APP_DEPLOY_SSH_KEY"),
                   "deploy_service_ip": os.getenv("APP_DEPLOY_SERVICE_IP", "").strip(),
                   "deploy_acme_email": os.getenv("APP_DEPLOY_ACME_EMAIL", "").strip(),
                   "deploy_base_domain": os.getenv("APP_DEPLOY_BASE_DOMAIN", "").strip().lower(),

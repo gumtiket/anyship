@@ -441,7 +441,7 @@ def settings_for(tmp_path, **override):
     (tmp_path / "key.pub").write_text("ssh-ed25519 AAAA deploy\n")
     values = dict(deploy_source_dir=tmp_path / "sources", deploy_ssh_key=tmp_path / "key",
                   deploy_terraform_dir=tmp_path / "terraform", deploy_plugin_cache=tmp_path / "cache",
-                  deploy_base_domain="anyship.cloud", deploy_verify_tls=True, deploy_service_ip="203.0.113.10",
+                  deploy_base_domain="anyship.cloud", deploy_verify_tls=True, deploy_dns=True, deploy_service_ip="203.0.113.10",
                   deploy_acme_email="ops@example.com", database_url="sqlite://")
     return SimpleNamespace(**{**values, **override})
 
@@ -449,6 +449,16 @@ def settings_for(tmp_path, **override):
 def test_the_runner_is_assembled_from_settings(sessions, tmp_path):
     runner = DeployRunner.from_settings(settings_for(tmp_path), sessions)
     assert runner.source and runner.deployer
+
+
+def test_dns_is_managed_in_the_aws_scope_of_the_configured_domain_by_default(sessions, tmp_path):
+    runner = DeployRunner.from_settings(settings_for(tmp_path, deploy_base_domain="example.org"), sessions)
+    dns = runner.deployer._dns
+    assert dns is not None and dns.name_for("demo") == "*.demo.aws.example.org"
+
+
+def test_dns_is_left_alone_when_it_is_switched_off(sessions, tmp_path):
+    assert DeployRunner.from_settings(settings_for(tmp_path, deploy_dns=False), sessions).deployer._dns is None
 
 
 @pytest.mark.parametrize("override, message", [

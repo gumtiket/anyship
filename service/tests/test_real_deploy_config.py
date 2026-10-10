@@ -25,7 +25,7 @@ def test_the_default_and_the_mock_mode_need_no_deployment_settings():
 
 def test_real_mode_accepts_complete_settings_and_keeps_the_defaults_for_the_rest():
     settings = real()
-    assert settings.deployment_mode == "real" and settings.deploy_verify_tls is True
+    assert settings.deployment_mode == "real" and settings.deploy_verify_tls is True and settings.deploy_dns is True
     assert settings.deploy_terraform_dir.parts[-2:] == ("infra", "user-account")
     assert settings.deploy_plugin_cache.parts[-2:] == (".terraform.d", "plugin-cache")
 
@@ -103,6 +103,24 @@ def test_settings_are_read_from_the_environment(monkeypatch):
     assert settings.deploy_verify_tls is False
     assert settings.deploy_terraform_dir == Path("/opt/infra/user-account")
     assert settings.deploy_plugin_cache == Path("/var/cache/terraform")
+
+
+@pytest.mark.parametrize("value, expected", [("on", True), ("off", False), (" OFF ", False), ("On", True), (None, True), ("", True), ("  ", True)])
+def test_dns_management_is_read_from_the_environment_and_defaults_to_on(monkeypatch, value, expected):
+    monkeypatch.setenv("APP_DEMO", "true")
+    if value is None:
+        monkeypatch.delenv("APP_DEPLOY_DNS", raising=False)
+    else:
+        monkeypatch.setenv("APP_DEPLOY_DNS", value)
+    assert Settings.from_env().deploy_dns is expected
+
+
+@pytest.mark.parametrize("value", ["yes", "true", "0", "auto", "off;on"])
+def test_an_unclear_dns_setting_stops_the_server_instead_of_guessing(monkeypatch, value):
+    monkeypatch.setenv("APP_DEMO", "true")
+    monkeypatch.setenv("APP_DEPLOY_DNS", value)
+    with pytest.raises(ValueError, match="APP_DEPLOY_DNS"):
+        Settings.from_env()
 
 
 def test_environment_defaults_leave_real_deployment_off(monkeypatch):
