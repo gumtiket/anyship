@@ -2,10 +2,13 @@
 
 서비스(A)는 이 호출 하나만 알면 된다. 순서는 이렇다.
 
-    이미지 빌드 -> (aws 세트) 공용 기반 확인 -> 연결 확인 -> 배포 -> 오래된 이미지 정리
+    이미지 빌드 -> (aws 세트) 공용 기반 확인(+ DNS 레코드) -> 연결 확인 -> 배포 -> 오래된 이미지 정리
 
 공용 기반은 이미 있으면 state의 출력만 읽고(약 10초), 없으면 만든다(첫 배포만, 약 20분). 서비스가 저장해 둔 기반 값이 있어도 매번
 읽는 것은 호스트가 바뀌었을 때 낡은 값을 쓰지 않으려는 것이다(비용은 약 10초).
+
+`dns`(범위 `aws`의 `WildcardRecords`)를 주면 기반의 호스트 IP를 읽은 직후에 `*.<환경ID>.aws.<도메인>`을 그 IP로 맞춘다. 인증서 발급과
+헬스체크가 이 주소로 오므로 연결 확인 전에 해야 하고, 매 배포마다 맞추므로 호스트가 바뀌어도 스스로 고쳐진다. 주지 않으면 건너뛴다(수동 DNS).
 
 입력 오류(명세, 비밀 누락, SHA, 세트와 환경의 불일치)는 **아무것도 시작하기 전에** 찾는다. 20분짜리 기반 생성 뒤에야 "비밀이 빠졌다"를
 알게 되는 일을 막으려는 것이다.
@@ -18,6 +21,7 @@ from typing import Any, Mapping
 
 from .base import Adapter, LogFn
 from .compose import render_stack
+from .dns import DnsError, WildcardRecords
 from .foundation import FoundationSettings, ensure_foundation
 from .image_builder import BuildError, ImageBuilder
 from .models import IMAGE_TAG_PATTERN, AdapterError, DeployResult, Environment, LogEvent, Secrets, Spec
@@ -38,10 +42,13 @@ _STAGES = {
 
 class Deployer:
     def __init__(self, adapters: Mapping[str, Adapter], builder: ImageBuilder, *, runner: TerraformRunner | None = None,
-                 foundation: FoundationSettings | None = None, keep_images: int = 5):
+                 foundation: FoundationSettings | None = None, dns: WildcardRecords | None = None, keep_images: int = 5):
         if (runner is None) != (foundation is None):
             raise ValueError("runner and foundation settings must be given together")
+        if dns is not None and runner is None:
+            raise ValueError("dns needs the foundation step (runner and foundation settings)")  # 기반 단계가 없으면 호스트 IP를 알 수 없다
         self._adapters, self._builder, self._runner, self._foundation, self._keep = adapters, builder, runner, foundation, keep_images
+        self._dns = dns
 
     def deploy(self, env: Environment, spec: Spec, source_dir, commit_sha: str, secrets: Secrets, log: LogFn, *,
                set_name: SetName) -> DeployResult:
@@ -87,11 +94,13 @@ class Deployer:
             dockerfile = build.get("dockerfile", "Dockerfile") if isinstance(build, Mapping) else "Dockerfile"
             built = self._builder.build(source_dir, parsed.app, commit_sha, relay("build"), dockerfile=dockerfile)
 
-            foundation_created = None
+            foundation_created, dns_record = None, None
             if self._runner is not None and kind == "aws":
                 current = "foundation"
                 ensured = ensure_foundation(self._runner, env, self._foundation, relay("foundation"))
                 env, foundation_created = ensured.env, ensured.created
+                if self._dns is not None:
+                    dns_record = self._ensure_dns(env, relay("foundation"))
 
             current = "check"
             checked = adapter.check(env, relay("check"))
@@ -115,6 +124,8 @@ class Deployer:
             return fail(exc.error, "build", {"stderr": exc.tail} if exc.tail else None)
         except TerraformError as exc:
             return fail(exc.error, "foundation", {"stderr": exc.tail} if exc.tail else None)
+        except DnsError as exc:
+            return fail(exc.error, "foundation")
         except Exception as exc:  # 예기치 않은 오류. 문구에는 원문을 싣지 않고 종류만 남긴다(비밀이 섞일 수 있다)
             return fail(AdapterError(code="deploy_pipeline_error", message="배포 중 예기치 않은 오류가 발생했습니다.",
                                      hint="서비스 서버의 로그를 확인해 주세요.", retryable=True), current,
@@ -124,4 +135,13 @@ class Deployer:
         if foundation_created is not None:
             details["foundation_created"] = foundation_created
             details["foundation"] = ensured.fields()  # 서비스가 환경 레코드에 저장할 값(비밀이 아니다)
+        if dns_record is not None:
+            details["dns"] = dns_record
         return DeployResult(ok=True, url=result.url, image_tag=commit_sha, details=redact_json(details, known))
+
+    def _ensure_dns(self, env, log: LogFn) -> dict:
+        name = self._dns.name_for(env.env_id)
+        log(LogEvent(message=f"DNS 레코드 확인: {name} -> 호스트 {env.host}"))
+        changed = self._dns.ensure(env.env_id, env.host)
+        log(LogEvent(message="DNS 레코드를 새 주소로 맞췄습니다." if changed else "DNS 레코드가 이미 맞게 설정되어 있습니다."))
+        return {"record": name, "changed": changed}

@@ -4,6 +4,7 @@ import pytest
 
 from anyship_adapters import AdapterError, AwsEnvironment, CheckResult, DeployResult, LogEvent, OnpremEnvironment
 from anyship_adapters.deployer import Deployer
+from anyship_adapters.dns import DnsError
 from anyship_adapters.foundation import FoundationSettings
 from anyship_adapters.image_builder import BuildError, BuiltImage
 from anyship_adapters.terraform_runner import TerraformError
@@ -37,7 +38,7 @@ class Parts:
         self.runner_reads = ["ok"]
 
 
-def make_deployer(parts, *, runner=True, kinds=("aws-always-on", "onprem")):
+def make_deployer(parts, *, runner=True, kinds=("aws-always-on", "onprem"), dns=None):
     class Builder:
         def build(self, source_dir, app, sha, log, *, dockerfile="Dockerfile"):
             parts.order.append("build")
@@ -84,7 +85,7 @@ def make_deployer(parts, *, runner=True, kinds=("aws-always-on", "onprem")):
 
     adapters = {name: Adapter() for name in kinds}
     kwargs = dict(runner=Runner(), foundation=SETTINGS) if runner else {}
-    return Deployer(adapters, Builder(), **kwargs)
+    return Deployer(adapters, Builder(), dns=dns, **kwargs)
 
 
 def run(parts=None, env=ENV, spec=None, sha=SHA, secrets=None, set_name="aws-always-on", **deployer_options):
@@ -275,3 +276,98 @@ def test_the_runner_and_the_foundation_settings_must_be_given_together():
         Deployer({}, object(), runner=object())
     with pytest.raises(ValueError):
         Deployer({}, object(), foundation=SETTINGS)
+
+
+# --- DNS ---------------------------------------------------------------------------------------
+class FakeDns:
+    """WildcardRecords(scope="aws")를 흉내 낸다."""
+
+    def __init__(self, parts, changed=True, error=None, raises=None):
+        self.parts, self.changed, self.error, self.raises, self.calls = parts, changed, error, raises, []
+
+    def name_for(self, env_id):
+        return f"*.{env_id}.aws.anyship.cloud"
+
+    def ensure(self, env_id, ip):
+        self.parts.order.append("dns")
+        self.calls.append((env_id, ip))
+        if self.raises:
+            raise self.raises
+        if self.error:
+            raise DnsError(self.error)
+        return self.changed
+
+
+def test_the_dns_record_is_set_after_the_foundation_is_read_and_before_the_connection_check():
+    parts = Parts()
+    dns = FakeDns(parts)
+    result, parts, _ = run(parts, dns=dns)
+    assert result.ok and parts.order == ["build", "read", "dns", "check", "deploy", "prune"]
+    assert dns.calls == [("test", "43.201.158.8")]  # 서비스에 저장된 낡은 호스트(1.1.1.1)가 아니라 방금 읽은 값
+
+
+def test_after_a_foundation_is_created_the_dns_record_points_at_the_new_host():
+    parts = Parts()
+    parts.runner_reads = [MISSING, "ok"]
+    dns = FakeDns(parts)
+    result, parts, _ = run(parts, dns=dns)
+    assert result.ok and parts.order == ["build", "read", "apply", "read", "dns", "check", "deploy", "prune"]
+
+
+def test_the_dns_step_is_logged_inside_the_foundation_stage_and_stage_numbering_is_unchanged():
+    parts = Parts()
+    _, _, log = run(parts, dns=FakeDns(parts))
+    messages = [e.message for e in log.events if e.name == "공용 기반 확인"]
+    assert any("*.test.aws.anyship.cloud" in m and "43.201.158.8" in m for m in messages)
+    assert any("새 주소로 맞췄습니다" in m for m in messages)
+    assert {e.total for e in log.events if e.total} == {5}
+
+
+def test_an_unchanged_record_is_reported_as_already_correct():
+    parts = Parts()
+    result, _, log = run(parts, dns=FakeDns(parts, changed=False))
+    assert result.details["dns"] == {"record": "*.test.aws.anyship.cloud", "changed": False}
+    assert any("이미 맞게" in e.message for e in log.events)
+
+
+def test_the_result_tells_what_the_dns_step_did_and_says_nothing_when_there_is_none():
+    parts = Parts()
+    with_dns, _, _ = run(parts, dns=FakeDns(parts))
+    assert with_dns.details["dns"] == {"record": "*.test.aws.anyship.cloud", "changed": True}
+    without, _, _ = run()
+    assert "dns" not in without.details
+
+
+def test_a_failed_dns_update_stops_the_deploy_at_the_foundation_stage_with_its_own_code():
+    parts = Parts()
+    dns = FakeDns(parts, error=err("dns_change_failed", "DNS 레코드를 바꾸지 못했습니다.", hint="권한을 확인해 주세요.",
+                                   retryable=False))
+    result, parts, log = run(parts, dns=dns)
+    assert not result.ok and result.details["stage"] == "foundation"
+    assert (result.error.code, result.error.retryable, result.error.hint) == ("dns_change_failed", False, "권한을 확인해 주세요.")
+    assert parts.order == ["build", "read", "dns"]  # 연결 확인, 배포, 정리를 하지 않는다
+    assert any(e.level == "error" for e in log.events)
+
+
+def test_an_unexpected_dns_exception_becomes_a_foundation_stage_error_without_its_text():
+    parts = Parts()
+    result, _, _ = run(parts, dns=FakeDns(parts, raises=RuntimeError(f"leaked {USER_SECRET}")))
+    assert result.error.code == "deploy_pipeline_error" and result.details == {"stage": "foundation", "exception": "RuntimeError"}
+    assert USER_SECRET not in result.model_dump_json()
+
+
+def test_dns_is_not_touched_when_the_foundation_itself_fails_or_for_onprem():
+    parts = Parts()
+    parts.runner_reads = [TerraformError(err("access_denied"))]
+    dns = FakeDns(parts)
+    result, parts, _ = run(parts, dns=dns)
+    assert not result.ok and dns.calls == []
+    onprem_parts = Parts()
+    onprem_dns = FakeDns(onprem_parts)
+    result, _, _ = run(onprem_parts, env=ONPREM_ENV, set_name="onprem", dns=onprem_dns)
+    assert result.ok and onprem_dns.calls == []
+
+
+def test_dns_needs_the_foundation_step_because_the_host_address_comes_from_it():
+    with pytest.raises(ValueError):
+        make_deployer(Parts(), runner=False, dns=FakeDns(Parts()))
