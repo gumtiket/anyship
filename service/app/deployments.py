@@ -10,7 +10,8 @@ import json
 import time
 import uuid
 
-from sqlalchemy import or_, select, update
+from fastapi import HTTPException
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from .db import AwsEnvironment, DeployJob, Deployment
@@ -127,6 +128,23 @@ def interrupt_all(session, code: str, message: str, *, now: int | None = None) -
     session.execute(update(Deployment).where(Deployment.active_job_id.is_not(None)).values(active_job_id=None, lease_until=0))
     session.commit()
     return stopped.rowcount
+
+
+def clear_real_targets(session, *, project_id: str | None = None, environment_id: str | None = None,
+                       now: int | None = None) -> None:
+    """프로젝트나 환경을 지우기 전에 실제 배포 기록을 정리한다(삭제 트랜잭션은 호출하는 쪽이 가진다).
+
+    서비스의 기록만 지운다. 사용자 계정에 배포된 앱과 기반은 건드리지 않는다. 진행 중인 작업이 있으면 지우지 않는다."""
+    now = int(time.time()) if now is None else now
+    if environment_id is not None:
+        if session.scalar(select(Deployment.project_id).where(Deployment.aws_environment_id == environment_id)):
+            raise HTTPException(409, {"code": "environment_in_use", "message": "배포 대상으로 사용 중인 환경입니다. 프로젝트의 배포 기록을 먼저 정리해 주세요."})
+    if project_id is not None:
+        session.execute(delete(Deployment).where(
+            Deployment.project_id == project_id, or_(Deployment.active_job_id.is_(None), Deployment.lease_until <= now)))
+        if session.scalar(select(Deployment.project_id).where(Deployment.project_id == project_id)):
+            raise HTTPException(409, {"code": "deploy_job_running", "message": "배포 작업 중입니다. 완료 후 삭제해 주세요."})
+        session.execute(delete(DeployJob).where(DeployJob.project_id == project_id))
 
 
 def add_events(events: list, new: list) -> list:
