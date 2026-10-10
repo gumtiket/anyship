@@ -1,6 +1,7 @@
-import { useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { ChevronDown, FileCode2 } from 'lucide-react';
-import { parseUnifiedDiff } from './unifiedDiff';
+import { parseUnifiedDiff, type FileDiff } from './unifiedDiff';
+import type { HighlightedDiff } from './diffSyntax';
 import './file-diff.css';
 
 const statuses = { added: '추가', deleted: '삭제', modified: '수정' };
@@ -9,6 +10,16 @@ export function FileDiffViewer({ diff }: { diff: string }) {
   const id = useId();
   const files = useMemo(() => parseUnifiedDiff(diff), [diff]);
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [highlighted, setHighlighted] = useState<{ files: FileDiff[]; tokens: Array<HighlightedDiff | null> }>();
+  useEffect(() => {
+    if (!files) return;
+    let active = true;
+    // Show the readable plain diff first; language grammars load only on review.
+    void import('./diffSyntax').then(({ highlightDiff }) => {
+      if (active) setHighlighted({ files, tokens: files.map(highlightDiff) });
+    }).catch(() => { /* Keep plain text if the highlighting chunk cannot load. */ });
+    return () => { active = false; };
+  }, [files]);
   if (!files) return <div className="file-diff-fallback">
     <p className="small quiet">파일별 표시를 할 수 없어 원본 diff를 표시합니다.</p>
     <pre className="change-diff" aria-label="전체 변경안 원본">{diff}</pre>
@@ -38,11 +49,16 @@ export function FileDiffViewer({ diff }: { diff: string }) {
       <div id={`${id}-${index}`} className="diff-scroll" hidden={collapsed.has(index)} role="region" tabIndex={0} aria-label={`${file.path} diff, 가로 스크롤 가능`}>
         {!collapsed.has(index) && <table className="diff-table" aria-label={`${file.path} 변경 전후 줄 비교`}>
           <thead className="diff-sr-only"><tr><th scope="col">이전 줄</th><th scope="col">이후 줄</th><th scope="col">변경</th><th scope="col">코드</th></tr></thead>
-          <tbody>{file.lines.map((line, lineIndex) => <tr key={lineIndex} className={`diff-line diff-${line.kind}`}>
-            <td className="diff-line-number">{line.oldNumber}</td><td className="diff-line-number">{line.newNumber}</td>
-            <td className="diff-line-sign">{line.kind === 'addition' ? '+' : line.kind === 'deletion' ? '−' : ''}</td>
-            <td className="diff-line-code"><code>{line.text || ' '}</code></td>
-          </tr>)}</tbody>
+          <tbody>{file.lines.map((line, lineIndex) => {
+            const tokens = highlighted?.files === files ? highlighted.tokens[index]?.[lineIndex] : undefined;
+            return <tr key={lineIndex} className={`diff-line diff-${line.kind}`}>
+              <td className="diff-line-number">{line.oldNumber}</td><td className="diff-line-number">{line.newNumber}</td>
+              <td className="diff-line-sign">{line.kind === 'addition' ? '+' : line.kind === 'deletion' ? '−' : ''}</td>
+              <td className="diff-line-code"><code>{tokens?.length
+                ? tokens.map((token, tokenIndex) => <span key={tokenIndex} className={token.className || undefined}>{token.text}</span>)
+                : line.text}</code></td>
+            </tr>;
+          })}</tbody>
         </table>}
       </div>
     </section>)}
