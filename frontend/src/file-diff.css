@@ -18,6 +18,14 @@
 .diff-table .diff-line-sign{width:1%;min-width:24px;text-align:center;user-select:none}
 .diff-table .diff-line-code{padding:0 12px 0 4px;white-space:pre}
 .diff-line-code code{font:inherit}
+.diff-line-code .hljs-keyword,.diff-line-code .hljs-selector-tag,.diff-line-code .hljs-doctag{color:#a31545}
+.diff-line-code .hljs-string,.diff-line-code .hljs-regexp,.diff-line-code .hljs-meta .hljs-string{color:#063b70}
+.diff-line-code .hljs-number,.diff-line-code .hljs-literal,.diff-line-code .hljs-attr,.diff-line-code .hljs-variable,.diff-line-code .hljs-template-variable{color:#075985}
+.diff-line-code .hljs-title,.diff-line-code .hljs-section{color:#6639a6}
+.diff-line-code .hljs-comment,.diff-line-code .hljs-quote{color:#525d66}
+.diff-line-code .hljs-built_in,.diff-line-code .hljs-type,.diff-line-code .hljs-params{color:#78350f}
+.diff-line-code .hljs-name,.diff-line-code .hljs-selector-class,.diff-line-code .hljs-selector-id{color:#116329}
+.diff-line-code .hljs-meta,.diff-line-code .hljs-symbol{color:#8a4600}
 .diff-addition{background:#dafbe1}
 .diff-deletion{background:#ffebe9}
 .diff-addition .diff-line-number{background:#aceebb66}
