@@ -36,13 +36,13 @@ AnyShip은 GitHub 저장소 URL을 입력하면, AI가 12-factor 원칙을 기�
 
 ### 사용흐름 (https://app.anyship.cloud/)
 
-1. GitHub로 로그인하고 저장소 URL과 브랜치를 등록합니다.
+1. GitHub로 로그인하고 저장소 URL과 기준 브랜치를 등록합니다.
 2. 배포 환경(AWS 또는 온프레미스)을 연결합니다.
 3. 분석을 요청하면 위반 목록과 수정 항목이 만들어집니다.
 4. 변경안(diff)을 검토하고 선택해 GitHub Draft PR로 제출합니다.
 5. 머지한 커밋을 이미지로 빌드해 환경에 배포하고, 진행 로그를 화면에서 확인합니다.
 
-![AnyShip_Serviceflow.png](.\docs\images\AnyShip_Serviceflow.png)
+![AnyShip_Serviceflow.png](./docs/images/AnyShip_Serviceflow.png)
 
 ---
 
