@@ -30,6 +30,7 @@ def main() -> int:
     parser.add_argument("--stack-name", required=True, help="사용자 계정의 온보딩 CloudFormation 스택 이름")
     parser.add_argument("--region", default="ap-northeast-2")
     parser.add_argument("--name", default="테스트 계정")
+    parser.add_argument("--env-id", help="이미 만든 공용 기반의 env_id(켜 둔 테스트 계정은 test). 비우면 배포할 때 정해진다")
     args = parser.parse_args()
 
     path = Path(args.database).expanduser().resolve()
@@ -50,7 +51,8 @@ def main() -> int:
     Base.metadata.create_all(engine)
     identifier, now = str(uuid.uuid4()), int(time.time())
     with sessions() as session:
-        session.add_all([User(id="local-test-user", github_id=-1, login="local-test", name="로컬 시험"),
+        # github_id는 양수여야 한다(음수 ID는 데모 모드 전용 세션으로 취급되어 일반 모드에서 거절된다).
+        session.add_all([User(id="local-test-user", github_id=900_000_001, login="local-test", name="로컬 시험"),
                          Workspace(id="local-test-workspace", name="로컬 시험")])
         session.flush()
         session.add(Membership(user_id="local-test-user", workspace_id="local-test-workspace", role="owner"))
@@ -60,7 +62,8 @@ def main() -> int:
             template_url="https://example.s3.amazonaws.com/not-used.yaml",
             service_role_arn="arn:aws:iam::000000000000:role/not-used", stack_name=args.stack_name,
             role_name=args.role_arn.rsplit("/", 1)[-1], status="CONNECTED", submitted_role_arn=args.role_arn,
-            role_arn=args.role_arn, aws_account_id=account, created_at=now, expires_at=now + 86400, verified_at=now))
+            role_arn=args.role_arn, aws_account_id=account, created_at=now, expires_at=now + 86400, verified_at=now,
+            env_id=args.env_id))
         session.commit()
     engine.dispose()
     print(f"만들었습니다: {path}\n환경 ID: {identifier}\n")

@@ -1,3 +1,4 @@
+import ipaddress
 import os
 import re
 from dataclasses import dataclass, field
@@ -28,12 +29,23 @@ class Settings:
     aws_regions: tuple[str, ...] = ()
     aws_role_name: str = "deploy-service-role"
     aws_verify: str = ""  # "sts"면 환경 등록의 연결 확인에 STSAdapter를 쓴다. 기본은 꺼짐(어댑터 연결 대기)
+    # 실제 배포(deployment_mode="real")에서만 쓴다. 비밀이 아닌 값뿐이다(개인 키는 경로만 받고 내용을 읽지 않는다).
+    deploy_source_dir: Path | None = None  # 받아 둔 소스를 두는 폴더. 저장소 이름과 같은 하위 폴더를 배포한다
+    deploy_ssh_key: Path | None = None  # 호스트 접속용 개인 키 파일. 공개 키는 같은 이름 + ".pub"
+    deploy_service_ip: str = ""  # 호스트의 SSH(22)를 이 서비스 서버 주소에만 연다
+    deploy_acme_email: str = ""  # Traefik의 Let's Encrypt 연락 주소
+    deploy_base_domain: str = ""  # 앱 주소는 <앱>.<환경ID>.aws.<이 도메인>
+    deploy_terraform_dir: Path = Path(__file__).resolve().parents[2] / "infra" / "user-account"
+    deploy_plugin_cache: Path = Path.home() / ".terraform.d" / "plugin-cache"
+    deploy_verify_tls: bool = True  # False는 Let's Encrypt staging 인증서를 시험할 때만
     frontend_dist: Path = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     demo_workspaces: Path = Path(__file__).resolve().parents[1] / "workspaces" / "demo"
 
     def __post_init__(self):
-        if self.deployment_mode not in ("unavailable", "mock"):
-            raise ValueError("APP_DEPLOYMENT_MODE must be unavailable or mock.")
+        if self.deployment_mode not in ("unavailable", "mock", "real"):
+            raise ValueError("APP_DEPLOYMENT_MODE must be unavailable, mock or real.")
+        if self.deployment_mode == "real":
+            self._validate_real_deployment()
         if self.production and self.deployment_mode == "mock":
             raise ValueError("Mock deployments are only available in development.")
         if not 0 <= self.mock_step_delay <= 2:
@@ -58,6 +70,26 @@ class Settings:
             raise ValueError("APP_GITHUB_APP_SLUG must be a GitHub App slug.")
         if self.production and not self.github_configured:
             raise ValueError("Production requires GitHub App configuration.")
+
+    def _validate_real_deployment(self):
+        # 값이 아니라 이름만 알린다. 빠진 설정은 서버가 뜰 때 바로 알려 20분짜리 작업 중에 드러나지 않게 한다.
+        if self.demo:
+            raise ValueError("APP_DEPLOYMENT_MODE=real cannot be used with APP_DEMO=true.")
+        missing = [name for name, value in (("APP_DEPLOY_SOURCE_DIR", self.deploy_source_dir),
+                                            ("APP_DEPLOY_SSH_KEY", self.deploy_ssh_key),
+                                            ("APP_DEPLOY_SERVICE_IP", self.deploy_service_ip),
+                                            ("APP_DEPLOY_ACME_EMAIL", self.deploy_acme_email),
+                                            ("APP_DEPLOY_BASE_DOMAIN", self.deploy_base_domain)) if not value]
+        if missing:
+            raise ValueError("Real deployments require: " + ", ".join(missing) + ".")
+        try:
+            ipaddress.ip_address(self.deploy_service_ip)
+        except ValueError:
+            raise ValueError("APP_DEPLOY_SERVICE_IP must be an IP address.") from None
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", self.deploy_acme_email):
+            raise ValueError("APP_DEPLOY_ACME_EMAIL must be an email address.")
+        if not re.fullmatch(r"(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}", self.deploy_base_domain):
+            raise ValueError("APP_DEPLOY_BASE_DOMAIN must be a lowercase domain name.")
 
     @property
     def aws_setup_issues(self):
@@ -97,4 +129,21 @@ class Settings:
             aws_regions=tuple(dict.fromkeys(r.strip() for r in os.getenv("APP_AWS_REGIONS", "").split(",") if r.strip())),
             aws_role_name=os.getenv("APP_AWS_ROLE_NAME", "deploy-service-role").strip(),
             aws_verify=os.getenv("APP_AWS_VERIFY", "").strip().lower(),
+            **cls._deploy_from_env(),
         )
+
+    @staticmethod
+    def _deploy_from_env():
+        def path(name):
+            value = os.getenv(name, "").strip()
+            return Path(value).expanduser() if value else None
+
+        values = {"deploy_source_dir": path("APP_DEPLOY_SOURCE_DIR"), "deploy_ssh_key": path("APP_DEPLOY_SSH_KEY"),
+                  "deploy_service_ip": os.getenv("APP_DEPLOY_SERVICE_IP", "").strip(),
+                  "deploy_acme_email": os.getenv("APP_DEPLOY_ACME_EMAIL", "").strip(),
+                  "deploy_base_domain": os.getenv("APP_DEPLOY_BASE_DOMAIN", "").strip().lower(),
+                  "deploy_verify_tls": os.getenv("APP_DEPLOY_VERIFY_TLS", "true").strip().lower() != "false"}
+        for key, name in (("deploy_terraform_dir", "APP_DEPLOY_TERRAFORM_DIR"), ("deploy_plugin_cache", "APP_DEPLOY_PLUGIN_CACHE")):
+            if path(name):
+                values[key] = path(name)
+        return values

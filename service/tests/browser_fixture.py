@@ -2,6 +2,7 @@
 
 Run from service: python -m tests.browser_fixture
 Open http://127.0.0.1:8001/_test_only/login. Never used by app.main or launch scripts.
+--deploy: real deployment screen with a fake source/deployer (no AWS, no Docker); jobs take a few seconds.
 """
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,6 +10,10 @@ from urllib.parse import urlencode, parse_qs, urlsplit
 import json
 import sys
 from html import escape
+
+import threading
+import time
+import uuid
 
 import httpx
 import uvicorn
@@ -22,21 +27,69 @@ from app.db import Base
 from .test_real_workflow import GitHubHTTP, login
 
 
+def deploy_runner(directory, database_url):
+    """화면 확인용 실행기: 진짜 스레드와 진짜 작업 처리, 가짜 소스와 배포자. 몇 초에 걸쳐 단계 로그를 흘린다."""
+    from anyship_adapters import AdapterError, DeployResult, LogEvent
+    from pathlib import Path as P
+    from types import SimpleNamespace
+    from app.db import database as open_database
+    from app.deploy_runner import DeployRunner
+    from .test_deploy_runner import BUCKET, FOUNDATION, SHA, FakeAccess, FakeDeployer, FakeSource
+
+    def slow(log, secrets):
+        names = ["이미지 빌드", "공용 기반 확인", "연결 확인", "배포", "정리"]
+        for number, name in enumerate(names, start=1):
+            time.sleep(1.2)
+            log(LogEvent(message=f"{name} 진행 중", step=number, total=5, name=name))
+        if "FAIL" in secrets:
+            return DeployResult(ok=False, error=AdapterError(code="healthcheck_failed", message="앱이 /healthz에 응답하지 않았습니다.",
+                                hint="앱 로그를 확인해 주세요.", retryable=True), details={"stage": "deploy"})
+        return DeployResult(ok=True, url="https://todo.test.aws.anyship.cloud", image_tag=SHA,
+                            details={"foundation": FOUNDATION, "foundation_created": False})
+
+    _, sessions = open_database(database_url)
+    settings = SimpleNamespace(database_url=database_url)
+    return DeployRunner(settings, sessions, source=FakeSource(), deployer=FakeDeployer(slow), access=FakeAccess(),
+                        lock_dir=P(directory) / "deploy-lock")
+
+
+def seed_environment(app, client):
+    """로그인한 사용자에게 연결된 AWS 환경 한 건을 만든다(화면 확인용)."""
+    from sqlalchemy import select
+    from app.db import AwsEnvironment, User
+    from .test_deploy_runner import BUCKET, ROLE
+    workspace = client.get("/api/me").json()["workspace"]["id"]
+    with app.state.sessions() as session:
+        user = session.scalar(select(User.id))
+        identifier = str(uuid.uuid4())
+        session.add(AwsEnvironment(
+            id=identifier, workspace_id=workspace, created_by=user, request_id=identifier, name="테스트 계정",
+            region="ap-northeast-2", external_id=identifier.replace("-", "") * 2,
+            template_url="https://example.s3.amazonaws.com/a.yaml", service_role_arn="arn:aws:iam::999999999999:role/s",
+            stack_name="anyship-onboarding-x", role_name="deploy-service-role", status="CONNECTED", role_arn=ROLE,
+            aws_account_id="223455088214", created_at=1, expires_at=2, env_id="test", state_bucket=BUCKET))
+        session.commit()
+
+
 def main():
     with TemporaryDirectory(prefix="anyship-browser-test-") as directory:
         fixture = GitHubHTTP()
         onboarding = "--onboarding" in sys.argv
         mock = "--mock" in sys.argv
+        deploy = "--deploy" in sys.argv
         fixture.repo_selected = not onboarding
         with httpx.Client(transport=httpx.MockTransport(fixture)) as remote:
             # Every outgoing request is intercepted; unknown routes fail closed.
             httpx.request = remote.request
+            database_url = f"sqlite:///{Path(directory) / 'test.db'}"
+            real = dict(deploy_source_dir=Path(directory), deploy_ssh_key=Path(directory) / "key", deploy_service_ip="203.0.113.10",
+                        deploy_acme_email="ops@example.com", deploy_base_domain="anyship.cloud") if deploy else {}
             app = create_app(Settings(
-                app_origin="http://127.0.0.1:8001", database_url=f"sqlite:///{Path(directory) / 'test.db'}",
+                app_origin="http://127.0.0.1:8001", database_url=database_url,
                 token_key=Fernet.generate_key().decode(), github_client_id="fixture",
                 github_client_secret="fixture", github_app_slug="fixture", ai_mode="placeholder",
-                deployment_mode="mock" if mock else "unavailable", mock_step_delay=0.15,
-            ))
+                deployment_mode="mock" if mock else "real" if deploy else "unavailable", mock_step_delay=0.15, **real,
+            ), deploy_runner=deploy_runner(directory, database_url) if deploy else None)
             Base.metadata.create_all(app.state.engine)
             @app.get("/_test_only/login")
             def test_login():
@@ -68,7 +121,9 @@ def main():
             with TestClient(app, base_url="http://127.0.0.1:8001") as client:
                 login(client)
                 cookie = client.cookies.get("app_session")
-                if mock:
+                if deploy:
+                    seed_environment(app, client)
+                if mock or deploy:
                     project = client.post("/api/projects", json={"repository_url": "https://github.com/owner/real-repo", "branch": "main"},
                         headers={"Origin": "http://127.0.0.1:8001", "X-CSRF-Token": client.get("/api/me").json()["csrf_token"]})
                     assert project.status_code == 201, project.text
