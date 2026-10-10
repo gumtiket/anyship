@@ -5,23 +5,27 @@ data "aws_route53_zone" "main" {
   private_zone = false
 }
 
-# The service creates one wildcard record per registered environment
-# (*.<env-id>.onprem.anyship.cloud -> that server's public IP) and removes it
-# when the environment is deleted. No human adds records per server.
+# The service creates one wildcard record per registered environment and removes
+# it when the environment is deleted. No human adds records per server:
+#   *.<env-id>.onprem.anyship.cloud -> the user's own server (onprem set)
+#   *.<env-id>.aws.anyship.cloud    -> the host of the user's AWS foundation (aws sets)
 #
 # Scope: this one zone, A records, UPSERT/DELETE only, and only record names of
-# the form *.<env-id>.onprem.anyship.cloud, so the service server cannot touch
-# records like www.anyship.cloud.
+# the two forms above, so the service server cannot touch records like
+# www.anyship.cloud. The scopes must match SCOPES in
+# infra/adapters/anyship_adapters/dns.py.
 #
 # Route 53 normalizes names before checking this condition: lowercase, and the
 # wildcard "*" becomes "\052" (the same form the API returns). Whether the
 # normalized name ends with a dot is not certain from the docs, so both forms
-# are allowed; both stay under onprem.anyship.cloud. Verify with
-# infra/adapters/scripts/check_dns_policy.py after every apply.
+# are allowed; both stay under onprem.anyship.cloud or aws.anyship.cloud. Verify
+# with infra/adapters/scripts/check_dns_policy.py after every apply.
 locals {
   env_record_name_patterns = [
     "\\052.*.onprem.anyship.cloud",
     "\\052.*.onprem.anyship.cloud.",
+    "\\052.*.aws.anyship.cloud",
+    "\\052.*.aws.anyship.cloud.",
   ]
 }
 
