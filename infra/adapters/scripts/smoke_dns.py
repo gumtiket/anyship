@@ -3,8 +3,11 @@
 서비스 서버에서 실행한다(인스턴스 역할이 Route 53 권한을 갖고 있다).
 
     pip install -e ".[aws]"
-    python scripts/smoke_dns.py --ip 3.38.88.141
+    python scripts/smoke_dns.py --ip 3.38.88.141                 # 온프레미스 범위(*.<환경ID>.onprem.<도메인>)
+    python scripts/smoke_dns.py --ip 3.38.88.141 --scope aws     # AWS 범위(*.<환경ID>.aws.<도메인>)
 
+`--existing-env`는 이미 레코드가 있는 환경을 **같은 값으로 ensure해서** 이름 조회가 맞는지 보는 용도다. 그 레코드의 TTL이
+60초가 아니면 ensure가 레코드를 바꾸므로, 사람이 직접 만든 레코드(예: 손으로 관리하는 `*.test.aws.<도메인>`)는 지정하지 않는다.
 기존 레코드는 건드리지 않는다. 시험용 환경 ID(기본 dnstest)의 레코드만 만들고 지우며,
 시작과 끝에 영역의 전체 레코드 목록을 비교해서 다른 레코드가 그대로인지 확인한다.
 """
@@ -15,7 +18,7 @@ import time
 
 import boto3
 
-from anyship_adapters.dns import DnsError, WildcardRecords
+from anyship_adapters.dns import SCOPES, DnsError, WildcardRecords
 
 results: list[tuple[str, bool]] = []
 
@@ -63,13 +66,15 @@ def main() -> int:
     parser.add_argument("--env-id", default="dnstest", help="시험용 환경 ID(기존 환경 ID는 쓰지 마세요)")
     parser.add_argument("--existing-env", default="demo", help="이미 레코드가 있는 환경(읽기만 확인)")
     parser.add_argument("--domain", default="anyship.cloud")
+    parser.add_argument("--scope", choices=SCOPES, default="onprem",
+                        help="레코드 이름의 범위: onprem(*.<환경ID>.onprem.<도메인>) 또는 aws(*.<환경ID>.aws.<도메인>)")
     args = parser.parse_args()
     if args.env_id == args.existing_env:
         print("시험용 환경 ID가 기존 환경과 같습니다. 다른 값을 쓰세요.")
         return 2
 
-    records = WildcardRecords(base_domain=args.domain)
-    host = f"probe.{args.env_id}.onprem.{args.domain}"
+    records = WildcardRecords(base_domain=args.domain, scope=args.scope)
+    host = f"probe.{args.env_id}.{args.scope}.{args.domain}"
     try:
         print("0) 시작 전 상태")
         before = snapshot(args.domain)
@@ -80,7 +85,7 @@ def main() -> int:
             before = snapshot(args.domain)
 
         print(f"1) 기존 환경({args.existing_env})의 와일드카드 이름 조회 확인 (쓰기 없음)")
-        existing = [r for r in before if r[0] == f"\\052.{args.existing_env}.onprem.{args.domain}." and r[1] == "A"]
+        existing = [r for r in before if r[0] == f"\\052.{args.existing_env}.{args.scope}.{args.domain}." and r[1] == "A"]
         if existing:
             current_ip = existing[0][2]
             changed = timed(lambda: records.ensure(args.existing_env, current_ip))
