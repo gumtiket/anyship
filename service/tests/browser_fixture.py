@@ -3,6 +3,7 @@
 Run from service: python -m tests.browser_fixture
 Open http://127.0.0.1:8001/_test_only/login. Never used by app.main or launch scripts.
 --deploy: real deployment screen with a fake source/deployer (no AWS, no Docker); jobs take a few seconds.
+         /_test_only/fail-next-destroy makes the next removal fail once (to see the error screen).
 """
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -29,7 +30,7 @@ from .test_real_workflow import GitHubHTTP, login
 
 def deploy_runner(directory, database_url):
     """화면 확인용 실행기: 진짜 스레드와 진짜 작업 처리, 가짜 소스와 배포자. 몇 초에 걸쳐 단계 로그를 흘린다."""
-    from anyship_adapters import AdapterError, DeployResult, LogEvent
+    from anyship_adapters import AdapterError, DeployResult, DestroyResult, LogEvent
     from pathlib import Path as P
     from types import SimpleNamespace
     from app.db import database as open_database
@@ -47,10 +48,24 @@ def deploy_runner(directory, database_url):
         return DeployResult(ok=True, url="https://todo.test.aws.anyship.cloud", image_tag=SHA,
                             details={"foundation": FOUNDATION, "foundation_created": False})
 
+    state = {"fail_next_destroy": False}  # /_test_only/fail-next-destroy로 다음 삭제 한 번을 실패시킨다
+
+    def slow_destroy(log):
+        for number, name in enumerate(["컨테이너와 볼륨 제거", "서버의 앱 폴더 제거"], start=1):
+            time.sleep(1.2)
+            log(LogEvent(message=f"{name} 진행 중", step=number, total=2, name="앱 삭제"))
+        if state["fail_next_destroy"]:
+            state["fail_next_destroy"] = False
+            return DestroyResult(ok=False, error=AdapterError(
+                code="destroy_failed", message="컨테이너를 지우지 못했습니다.", hint="서버에서 docker compose down을 확인해 주세요."))
+        return DestroyResult(ok=True)
+
     _, sessions = open_database(database_url)
     settings = SimpleNamespace(database_url=database_url)
-    return DeployRunner(settings, sessions, source=FakeSource(), deployer=FakeDeployer(slow), access=FakeAccess(),
-                        lock_dir=P(directory) / "deploy-lock")
+    runner = DeployRunner(settings, sessions, source=FakeSource(), deployer=FakeDeployer(slow, destroy_behaviour=slow_destroy),
+                          access=FakeAccess(), lock_dir=P(directory) / "deploy-lock")
+    runner.test_state = state
+    return runner
 
 
 def seed_environment(app, client):
@@ -82,6 +97,7 @@ def main():
             # Every outgoing request is intercepted; unknown routes fail closed.
             httpx.request = remote.request
             database_url = f"sqlite:///{Path(directory) / 'test.db'}"
+            runner = deploy_runner(directory, database_url) if deploy else None
             real = dict(deploy_source_dir=Path(directory), deploy_ssh_key=Path(directory) / "key", deploy_service_ip="203.0.113.10",
                         deploy_acme_email="ops@example.com", deploy_base_domain="anyship.cloud") if deploy else {}
             app = create_app(Settings(
@@ -89,8 +105,14 @@ def main():
                 token_key=Fernet.generate_key().decode(), github_client_id="fixture",
                 github_client_secret="fixture", github_app_slug="fixture", ai_mode="placeholder",
                 deployment_mode="mock" if mock else "real" if deploy else "unavailable", mock_step_delay=0.15, **real,
-            ), deploy_runner=deploy_runner(directory, database_url) if deploy else None)
+            ), deploy_runner=runner)
             Base.metadata.create_all(app.state.engine)
+            if deploy:
+                @app.get("/_test_only/fail-next-destroy")
+                def fail_next_destroy():
+                    runner.test_state["fail_next_destroy"] = True
+                    return {"ok": True}
+
             @app.get("/_test_only/login")
             def test_login():
                 response = RedirectResponse("/")

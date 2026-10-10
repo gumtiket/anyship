@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ExternalLink, LoaderCircle, Plus, RefreshCw, Rocket, X } from 'lucide-react';
 import { api, mutation } from './api';
+import { DeleteRegistration } from './DeleteRegistration';
 import './mock-deployment.css';
 import './deployment.css';
 
@@ -11,17 +12,19 @@ type Target = {
 type Environment = { id: string; name: string; region: string; available: boolean };
 type Overview = { target: Target | null; sets: string[]; environments: Environment[] };
 type Job = {
-  id: string; request_id: string; set_name: string; image_tag: string; status: string; stage: string; created_at: number;
+  id: string; request_id: string; action: 'deploy' | 'destroy'; set_name: string; image_tag: string; status: string; stage: string;
+  created_at: number;
   logs: { step: number; total: number; name: string; message: string; level: string }[];
   result: { ok?: boolean; url?: string; error?: { message: string; hint?: string | null; retryable?: boolean } };
 };
 type Secret = { key: number; name: string; value: string };
 
 const sets: Record<string, string> = { 'aws-always-on': 'AWS 상시 실행' };
+const actions: Record<string, string> = { deploy: '배포', destroy: '배포 제거' };
 const states: Record<string, string> = { queued: '대기', running: '진행 중', succeeded: '성공', failed: '실패', interrupted: '중단' };
 const stages: Record<string, string> = {
   source: '소스 확인', spec: '배포 명세 검사', build: '이미지 빌드', foundation: '공용 기반 확인', check: '연결 확인',
-  deploy: '배포', environment: '환경 준비', runner: '실행기',
+  deploy: '배포', destroy: '앱 삭제', environment: '환경 준비', runner: '실행기',
 };
 const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
@@ -107,6 +110,25 @@ export function Deployment({ projectId, csrf, mode, onError }: {
       try { await refresh(); } catch { /* 처음 오류와 요청 ID를 유지한다. */ }
     } finally { inFlight.current = false; setBusy(false); }
   }
+  // 배포한 앱을 지운다(앱 컨테이너와 서버의 앱 폴더만). 확인 대화상자가 오류를 보여 주도록 실패는 다시 던진다.
+  async function removeApp() {
+    if (inFlight.current || !target) return;
+    inFlight.current = true; setBusy(true); setError(''); setNotice('');
+    const key = JSON.stringify(['destroy', target.environment_id, target.image_tag]);
+    if (pending.current?.key !== key) pending.current = { key, requestId: crypto.randomUUID() };
+    try {
+      const accepted = await api<Job>(endpoint + '/jobs', mutation(csrf, { request_id: pending.current.requestId, action: 'destroy', secrets: {} }));
+      pending.current = null;
+      setSelectedJob(accepted.id);
+      setJobs(items => [accepted, ...items.filter(item => item.id !== accepted.id)]);
+      await refresh();
+      setNotice('배포 제거를 시작했습니다. 진행 상황은 아래 기록에서 확인하세요.');
+    } catch (e) {
+      report(e);
+      try { await refresh(); } catch { /* 처음 오류와 요청 ID를 유지한다. */ }
+      throw e;
+    } finally { inFlight.current = false; setBusy(false); }
+  }
   function edit(key: number, change: Partial<Secret>) { setSecrets(items => items.map(item => item.key === key ? { ...item, ...change } : item)); }
 
   if (mode !== 'real') return null;
@@ -146,18 +168,24 @@ export function Deployment({ projectId, csrf, mode, onError }: {
         </details>
         <div className="mock-toolbar">
           <button className="primary" disabled={waiting || dirty || !secretsValid} onClick={() => void deploy()}><Rocket size={15}/> {target.deployed ? '다시 배포' : '배포하기'}</button>
-          {waiting && <span role="status"><LoaderCircle size={15} className="spin"/> 배포를 진행하고 있습니다. 창을 닫아도 계속 진행됩니다.</span>}
+          {waiting && <span role="status"><LoaderCircle size={15} className="spin"/> 작업을 진행하고 있습니다. 창을 닫아도 계속 진행됩니다.</span>}
         </div>
+        {target.deployed && <div className="mock-lifecycle">
+          <DeleteRegistration label="배포 제거" name={target.url || target.app_name} disabled={waiting || dirty}
+            description="이 앱의 컨테이너와 서버의 앱 폴더를 지웁니다. 앱 데이터베이스(DB)와 공용 기반(호스트, RDS)은 AWS 계정에 남아 요금이 계속 나옵니다. AnyShip의 프로젝트 연결은 유지되고 다시 배포할 수 있습니다."
+            onDelete={removeApp}/>
+        </div>}
       </>}
       <div className="mock-history"><h3>배포 기록 <span>최근 50개</span></h3>
         {!jobs.length ? <p className="quiet">아직 배포한 기록이 없습니다.</p> : <>
           <div className="mock-job-list" aria-label="배포 기록">{jobs.map(item => <button key={item.id} className={job?.id === item.id ? 'selected' : ''} onClick={() => setSelectedJob(item.id)}>
-            <span>배포{item.image_tag ? ` · ${item.image_tag}` : ''}</span><small>{states[item.status] ?? item.status} · {new Date(item.created_at).toLocaleString('ko-KR')}</small>
+            <span>{actions[item.action] ?? '배포'}{item.image_tag ? ` · ${item.image_tag}` : ''}</span><small>{states[item.status] ?? item.status} · {new Date(item.created_at).toLocaleString('ko-KR')}</small>
           </button>)}</div>
-          {job && <div className="mock-job-detail" aria-live="polite"><strong>배포 · {states[job.status] ?? job.status}</strong>
+          {job && <div className="mock-job-detail" aria-live="polite"><strong>{actions[job.action] ?? '배포'} · {states[job.status] ?? job.status}</strong>
             {job.status === 'failed' && job.stage && <p>실패한 단계: <strong>{stages[job.stage] ?? job.stage}</strong></p>}
             {job.result.error && <div className="error" role="alert"><div>{job.result.error.message}{job.result.error.hint && <small>{job.result.error.hint}</small>}</div></div>}
-            {job.status === 'succeeded' && job.result.url && <p>배포 완료: <a className="deploy-url" href={job.result.url} target="_blank" rel="noopener noreferrer">{job.result.url} <ExternalLink size={13}/></a></p>}
+            {job.status === 'succeeded' && job.action === 'destroy' && <p>배포를 제거했습니다. 앱 DB와 공용 기반은 남아 있습니다.</p>}
+            {job.status === 'succeeded' && job.action !== 'destroy' && job.result.url && <p>배포 완료: <a className="deploy-url" href={job.result.url} target="_blank" rel="noopener noreferrer">{job.result.url} <ExternalLink size={13}/></a></p>}
             <ol className="mock-logs">{job.logs.map((entry, index) => <li key={index} className={entry.level === 'error' ? 'is-error' : entry.level === 'warn' ? 'is-warn' : ''}>
               <span>{entry.total ? `${entry.step}/${entry.total}` : '·'}</span><div>{entry.name && <strong>{entry.name}</strong>}<p>{entry.message}</p></div>
             </li>)}</ol>
