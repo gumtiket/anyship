@@ -24,7 +24,7 @@ from .compose import render_stack
 from .dns import DnsError, WildcardRecords
 from .foundation import FoundationSettings, ensure_foundation
 from .image_builder import BuildError, ImageBuilder
-from .models import IMAGE_TAG_PATTERN, AdapterError, DeployResult, Environment, LogEvent, Secrets, Spec
+from .models import IMAGE_TAG_PATTERN, AdapterError, DeployResult, DestroyResult, Environment, LogEvent, Secrets, Spec
 from .rds_admin import db_name
 from .redact import make_safe_log, redact_json, redact_model
 from .sets import AWS_ALWAYS_ON, AWS_SERVERLESS, ONPREM, SetName
@@ -145,3 +145,27 @@ class Deployer:
         changed = self._dns.ensure(env.env_id, env.host)
         log(LogEvent(message="DNS 레코드를 새 주소로 맞췄습니다." if changed else "DNS 레코드가 이미 맞게 설정되어 있습니다."))
         return {"record": name, "changed": changed}
+
+    def destroy(self, env: Environment, app: str, log: LogFn, *, set_name: SetName) -> DestroyResult:
+        """배포한 앱을 지운다(컨테이너, 볼륨, 앱 디렉터리). 앱 DB와 공용 기반, DNS 레코드는 남긴다.
+
+        세트와 환경 종류가 맞는지 먼저 보고, 어댑터의 결과를 그대로 돌려주되 예기치 않은 예외는 종류만 남긴다(원문에 비밀이 섞일 수 있다)."""
+        adapter = self._adapters.get(set_name)
+        if adapter is None or SET_KINDS.get(set_name) != env.kind:
+            return DestroyResult(ok=False, error=AdapterError(
+                code="set_not_supported", message=f"이 환경에서는 '{set_name}' 세트를 사용할 수 없습니다."))
+        safe = make_safe_log(log)
+
+        def forward(event: LogEvent) -> None:
+            prefix = f"[{event.step}/{event.total}] " if event.step and event.total else ""
+            safe(LogEvent(level=event.level, step=1, total=1, name="앱 삭제", message=(prefix + event.message)[:2000]))
+
+        try:
+            result = adapter.destroy(env, app, forward)
+        except Exception as exc:
+            result = DestroyResult(ok=False, error=AdapterError(
+                code="destroy_pipeline_error", message="삭제 중 예기치 않은 오류가 발생했습니다.",
+                hint="서비스 서버의 로그를 확인해 주세요.", retryable=True), details={"exception": type(exc).__name__})
+        if not result.ok:
+            safe(LogEvent(level="error", step=1, total=1, name="앱 삭제", message=result.error.message))
+        return result

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from anyship_adapters import AdapterError, AwsEnvironment, CheckResult, DeployResult, LogEvent, OnpremEnvironment
+from anyship_adapters import AdapterError, AwsEnvironment, CheckResult, DeployResult, DestroyResult, LogEvent, OnpremEnvironment
 from anyship_adapters.deployer import Deployer
 from anyship_adapters.dns import DnsError
 from anyship_adapters.foundation import FoundationSettings
@@ -35,6 +35,8 @@ class Parts:
         self.order, self.builds, self.checks, self.deploys, self.applied = [], [], [], [], []
         self.build_error = self.runner_reads = self.check_result = self.deploy_result = self.prune_error = None
         self.deploy_raises = None
+        self.destroys, self.destroy_result, self.destroy_raises = [], None, None
+        self.destroy_message = "앱 디렉터리를 지우는 중"
         self.runner_reads = ["ok"]
 
 
@@ -82,6 +84,14 @@ def make_deployer(parts, *, runner=True, kinds=("aws-always-on", "onprem"), dns=
             if parts.deploy_raises:
                 raise parts.deploy_raises
             return parts.deploy_result or DeployResult(ok=True, url=URL, image_tag=image_tag, details={"database": "app_todo"})
+
+        def destroy(self, env, app, log):
+            parts.order.append("destroy")
+            parts.destroys.append((env, app))
+            log(LogEvent(step=2, total=2, name="파일 제거", message=parts.destroy_message))
+            if parts.destroy_raises:
+                raise parts.destroy_raises
+            return parts.destroy_result or DestroyResult(ok=True)
 
     adapters = {name: Adapter() for name in kinds}
     kwargs = dict(runner=Runner(), foundation=SETTINGS) if runner else {}
@@ -371,3 +381,67 @@ def test_dns_is_not_touched_when_the_foundation_itself_fails_or_for_onprem():
 def test_dns_needs_the_foundation_step_because_the_host_address_comes_from_it():
     with pytest.raises(ValueError):
         make_deployer(Parts(), runner=False, dns=FakeDns(Parts()))
+
+
+# --- 삭제 --------------------------------------------------------------------------------------
+def destroy(parts=None, env=ENV, app="todo", set_name="aws-always-on", **options):
+    parts = parts or Parts()
+    log = Log()
+    result = make_deployer(parts, **options).destroy(env, app, log, set_name=set_name)
+    return result, parts, log
+
+
+def test_destroy_hands_the_environment_and_app_to_the_adapter_of_that_set():
+    result, parts, _ = destroy()
+    assert result.ok and parts.order == ["destroy"] and parts.destroys == [(ENV, "todo")]
+
+
+def test_destroy_does_not_build_read_the_foundation_or_touch_dns():
+    parts = Parts()
+    result, parts, _ = destroy(parts, dns=FakeDns(parts))
+    assert result.ok and parts.order == ["destroy"]  # 빌드, 기반 읽기, DNS, 정리는 하지 않는다
+
+
+def test_destroy_logs_are_one_stage_with_the_adapters_own_numbering_kept_in_the_message():
+    _, _, log = destroy()
+    assert [(e.step, e.total, e.name) for e in log.events] == [(1, 1, "앱 삭제")]
+    assert log.events[0].message.startswith("[2/2] ")
+
+
+def test_a_failed_destroy_is_passed_on_unchanged_and_logged_as_an_error():
+    parts = Parts()
+    parts.destroy_result = DestroyResult(ok=False, error=err("destroy_failed", "컨테이너를 지우지 못했습니다.",
+                                                             hint="docker compose down을 확인해 주세요."),
+                                         details={"stderr": "boom"})
+    result, _, log = destroy(parts)
+    assert not result.ok and (result.error.code, result.error.hint) == ("destroy_failed", "docker compose down을 확인해 주세요.")
+    assert result.details == {"stderr": "boom"}
+    assert any(e.level == "error" and "지우지 못했습니다" in e.message for e in log.events)
+
+
+def test_an_unexpected_exception_in_destroy_is_reported_without_its_text():
+    parts = Parts()
+    parts.destroy_raises = RuntimeError(f"leaked {USER_SECRET}")
+    result, _, log = destroy(parts)
+    assert result.error.code == "destroy_pipeline_error" and result.error.retryable
+    assert result.details == {"exception": "RuntimeError"}
+    assert USER_SECRET not in result.model_dump_json() and all(USER_SECRET not in e.message for e in log.events)
+
+
+@pytest.mark.parametrize("env, set_name", [(ENV, "onprem"), (ONPREM_ENV, "aws-always-on"), (ENV, "nope")])
+def test_destroy_refuses_a_set_that_does_not_fit_the_environment_and_never_calls_the_adapter(env, set_name):
+    result, parts, _ = destroy(env=env, set_name=set_name)
+    assert not result.ok and result.error.code == "set_not_supported" and parts.destroys == []
+
+
+def test_an_onprem_environment_can_be_destroyed_through_its_own_set():
+    result, parts, _ = destroy(env=ONPREM_ENV, set_name="onprem")
+    assert result.ok and parts.destroys == [(ONPREM_ENV, "todo")]
+
+
+def test_secret_looking_values_in_the_adapters_destroy_logs_are_masked():
+    parts = Parts()
+    token = "gh" + "p_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"  # 비밀 스캐너가 진짜로 오해하지 않게 이어 붙인다
+    parts.destroy_message = f"ssh 출력: token={token}"
+    _, _, log = destroy(parts)
+    assert token not in " ".join(e.message for e in log.events) and "***" in log.events[0].message
