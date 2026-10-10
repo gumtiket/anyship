@@ -312,6 +312,32 @@ def test_real_ai_process_from_offline_sample(tmp_path, sample):
         assert result.report['transformation']['needs_approval']
 
 
+@pytest.mark.parametrize('provider', ['none', 'fake'])
+def test_reanalysis_accepts_deploy_spec_secret_flags(tmp_path, provider):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    original = {
+        'main.py': 'from fastapi import FastAPI\napp = FastAPI()\n',
+        'requirements.txt': 'fastapi==0.115.12\nuvicorn==0.34.2\n',
+        'deploy-spec.yaml': 'env:\n  - name: LOG_LEVEL\n    secret: false\n'
+                            '  - name: APP_SECRET\n    secret: true\n',
+    }
+    for name, content in original.items():
+        (repo / name).write_bytes(content.encode('utf-8'))
+    result = ProcessAIProvider(SimpleNamespace(ai_timeout=60)).run(
+        tmp_path, {'provider': provider, 'base_sha': BASE, 'source_repo': f'https://github.com/{NAME}',
+                   'app_name': 'fixture-app', 'target_env': 'aws', 'max_calls': 12},
+        lambda _: None, lambda: False)
+    assert result.report['status'] != 'failed'
+    assert result.report['adapter_compatible']
+    assert result.report['cost']['external_calls'] == 0
+    assert 'deploy-spec.yaml' in {file.path for file in result.files}
+    diff = analyses.make_diff(original, {file.path: file.content for file in result.files})
+    assert 'secret: false' in diff and 'secret: true' in diff
+    assert {name: (repo / name).read_bytes() for name in original} == {
+        name: content.encode('utf-8') for name, content in original.items()}
+
+
 def test_process_cancellation_terminates_child(tmp_path):
     with pytest.raises(AnalysisError, match='중단'):
         ProcessAIProvider(SimpleNamespace(ai_timeout=60)).run(tmp_path, {}, lambda _: None, lambda: True)
