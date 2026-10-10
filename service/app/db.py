@@ -126,6 +126,46 @@ class CodeChange(Base):
     lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
+class AnalysisSlot(Base):
+    __tablename__ = "analysis_slots"
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)
+    active_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
+
+
+class AnalysisRun(Base):
+    __tablename__ = "analysis_runs"
+    __table_args__ = (UniqueConstraint("project_id", "request_id", name="uq_analysis_request"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(36))
+    runtime_id: Mapped[str] = mapped_column(String(36))
+    repository_id: Mapped[int] = mapped_column(BigInteger)
+    repository: Mapped[str] = mapped_column(String(512))
+    base_branch: Mapped[str] = mapped_column(String(255))
+    base_sha: Mapped[str] = mapped_column(String(40))
+    base_tree: Mapped[str] = mapped_column(String(40), default="")
+    provider: Mapped[str] = mapped_column(String(16))
+    target_env: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    logs_json: Mapped[str] = mapped_column(Text, default="[]")
+    report_json: Mapped[str] = mapped_column(Text, default="{}")
+    files_json: Mapped[str] = mapped_column(Text, default="[]")
+    diff: Mapped[str] = mapped_column(Text, default="")
+    review_hash: Mapped[str] = mapped_column(String(64), default="")
+    publish_status: Mapped[str] = mapped_column(String(16), default="proposed")
+    branch: Mapped[str] = mapped_column(String(255))
+    tree_sha: Mapped[str] = mapped_column(String(40), default="")
+    commit_sha: Mapped[str] = mapped_column(String(40), default="")
+    pr_url: Mapped[str] = mapped_column(Text, default="")
+    pr_number: Mapped[int] = mapped_column(BigInteger, default=0)
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    error: Mapped[str] = mapped_column(Text, default="")
+    lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class MockDeployment(Base):
     __tablename__ = "mock_deployments"
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)

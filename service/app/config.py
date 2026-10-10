@@ -21,6 +21,10 @@ class Settings:
     token_key: str = field(default="", repr=False)
     demo: bool = False
     ai_mode: str = "unavailable"
+    ai_provider: str = "none"
+    ai_timeout: int = 300
+    ai_max_calls: int = 12
+    ai_workspace: Path = Path(__file__).resolve().parents[1] / "workspaces" / "analysis"
     production: bool = False
     deployment_mode: str = "unavailable"
     mock_step_delay: float = 0.3
@@ -58,8 +62,14 @@ class Settings:
             raise ValueError("APP_AWS_ROLE_NAME must be an IAM role name, optionally containing {id}.")
         if self.aws_verify not in ("", "sts"):
             raise ValueError("APP_AWS_VERIFY must be empty or sts.")
-        if self.ai_mode not in ("placeholder", "unavailable"):
-            raise ValueError("APP_AI_MODE must be placeholder or unavailable.")
+        if self.ai_mode not in ("placeholder", "unavailable", "bronze"):
+            raise ValueError("APP_AI_MODE must be placeholder, unavailable or bronze.")
+        if self.ai_provider not in ("none", "fake", "bedrock", "anthropic"):
+            raise ValueError("APP_AI_PROVIDER must be none, fake, bedrock or anthropic.")
+        if not 10 <= self.ai_timeout <= 900 or not 1 <= self.ai_max_calls <= 30:
+            raise ValueError("APP_AI_TIMEOUT must be 10..900; APP_AI_MAX_CALLS must be 1..30.")
+        if self.ai_mode == "bronze" and (self.demo or (self.production and self.ai_provider == "fake")):
+            raise ValueError("Bronze AI requires real GitHub authentication; fake is development-only.")
         if self.production and self.ai_mode == "placeholder":
             raise ValueError("AI placeholder is only available in development.")
         origin = urlsplit(self.app_origin)
@@ -126,6 +136,10 @@ class Settings:
             token_key=os.getenv("APP_TOKEN_KEY", ""),
             demo=os.getenv("APP_DEMO", "false").lower() == "true",
             ai_mode=os.getenv("APP_AI_MODE", "unavailable"),
+            ai_provider=os.getenv("APP_AI_PROVIDER", "none"),
+            ai_timeout=int(os.getenv("APP_AI_TIMEOUT", "300")),
+            ai_max_calls=int(os.getenv("APP_AI_MAX_CALLS", "12")),
+            ai_workspace=Path(os.getenv("APP_AI_WORKSPACE") or Path(__file__).resolve().parents[1] / "workspaces" / "analysis"),
             production=os.getenv("APP_ENV", "development") == "production",
             deployment_mode=os.getenv("APP_DEPLOYMENT_MODE", "unavailable"),
             mock_step_delay=float(os.getenv("APP_MOCK_STEP_DELAY", "0.3")),

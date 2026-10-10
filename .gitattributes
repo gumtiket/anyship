@@ -1,0 +1,2 @@
+# Trusted sample hashes must identify the same bytes on Windows and POSIX.
+AI/samples/** text eol=lf

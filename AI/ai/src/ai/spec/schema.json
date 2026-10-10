@@ -122,7 +122,7 @@
       ],
       "properties": {
         "name": {
-          "maxLength": 128,
+          "maxLength": 64,
           "not": {
             "anyOf": [
               {
@@ -132,6 +132,7 @@
                   "DATABASE_URL",
                   "ENV",
                   "HOME",
+                  "HOSTNAME",
                   "LAMBDA_RUNTIME_API",
                   "LAMBDA_RUNTIME_DIR",
                   "LAMBDA_TASK_ROOT",
@@ -140,13 +141,16 @@
                   "NODE_OPTIONS",
                   "PATH",
                   "PORT",
+                  "PWD",
                   "PYTHONHOME",
                   "PYTHONPATH",
                   "PYTHONSTARTUP",
                   "REDIS_URL",
                   "RUBYOPT",
+                  "SHELL",
                   "SHELLOPTS",
                   "STORAGE_URL",
+                  "USER",
                   "_HANDLER",
                   "_X_AMZN_TRACE_ID"
                 ]
@@ -156,7 +160,7 @@
               }
             ]
           },
-          "pattern": "^[A-Z][A-Z0-9_]+$",
+          "pattern": "^[A-Z][A-Z0-9_]{1,63}$",
           "title": "Name",
           "type": "string"
         },
