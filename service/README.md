@@ -2,7 +2,9 @@
 
 AnyShip 웹 서비스 실행과 실제 GitHub App 설정은 [로컬 실행 안내](../docs/LOCAL_DEVELOPMENT.md)를 참고하세요. 아래는 AWS 환경 등록 API와 독립적으로 사용할 수 있는 GitHub 모듈의 안내입니다.
 
-AI 분석·다중 파일 변경안 검토·Draft PR 흐름은 `APP_AI_MODE=bronze`로 활성화합니다. Python 3.12 이상에서 `requirements-dev.txt`를 설치하고 `alembic upgrade head`로 `0009`를 적용하세요. 제공자 설정과 검증 범위는 [AI 통합 안내](../docs/AI_INTEGRATION.md)를 참고하세요.
+AI 분석·다중 파일 변경안 검토·Draft PR 흐름은 `APP_AI_MODE=bronze`로 활성화합니다. Python 3.12 이상에서 `requirements-dev.txt`를 설치하고 `alembic upgrade head`로 최신 마이그레이션을 적용하세요. 제공자 설정과 검증 범위는 [AI 통합 안내](../docs/AI_INTEGRATION.md)를 참고하세요.
+
+온프레미스 등록·배포·정리는 [온프레미스 서비스 연결 안내](../docs/ONPREM_SERVICE.md)를 참고하세요. `0010`은 등록 토큰과 환경 작업 기록을 추가하고 기존 AWS 배포 대상을 보존합니다.
 
 ## Mock 어댑터로 배포 흐름 시험하기
 

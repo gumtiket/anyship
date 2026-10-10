@@ -5,6 +5,8 @@ Open http://127.0.0.1:8001/_test_only/login. Never used by app.main or launch sc
 --deploy: real deployment screen with a fake source/deployer (no AWS, no Docker); jobs take a few seconds.
          /_test_only/fail-next-destroy makes the next removal fail once (to see the error screen).
 --ai: real AI subprocess with a fake model and GitHub; never makes paid calls or remote writes.
+--onprem: registration and deployment with a fake connect factory (no SSH, Docker or DNS calls).
+          /_test_only/onprem/ready simulates the latest registered server's readiness report.
 """
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -99,13 +101,28 @@ def main():
             fixture = GitHubHTTP()
         onboarding = "--onboarding" in sys.argv
         mock = "--mock" in sys.argv
-        deploy = "--deploy" in sys.argv
+        onprem = "--onprem" in sys.argv
+        deploy = "--deploy" in sys.argv or onprem
         fixture.repo_selected = not onboarding
         with httpx.Client(transport=httpx.MockTransport(fixture)) as remote:
             # Every outgoing request is intercepted; unknown routes fail closed.
             httpx.request = remote.request
             database_url = f"sqlite:///{Path(directory) / 'test.db'}"
             runner = deploy_runner(directory, database_url) if deploy else None
+            if onprem:
+                from app.onprem_runner import OnpremRunner
+                from .onprem_fakes import RecordingTransport, load_fixture, parts
+                transport = RecordingTransport(Path(directory))
+                transport.settings.app_origin = "http://127.0.0.1:8001"
+                runner.onprem = OnpremRunner(runner, parts().deployer, transport)
+                original = runner.source.fetch
+
+                def onprem_source(*args):
+                    fetched = original(*args)
+                    return fetched.__class__(path=fetched.path, commit_sha=fetched.commit_sha,
+                        spec=load_fixture("specs").GENERATED, cleanup=fetched.cleanup)
+
+                runner.source.fetch = onprem_source
             real = dict(deploy_source_dir=Path(directory), deploy_ssh_key=Path(directory) / "key", deploy_service_ip="203.0.113.10",
                         deploy_acme_email="ops@example.com", deploy_base_domain="anyship.cloud") if deploy else {}
             app = create_app(Settings(
@@ -116,6 +133,19 @@ def main():
                 deployment_mode="mock" if mock else "real" if deploy else "unavailable", mock_step_delay=0.15, **real,
             ), deploy_runner=runner)
             Base.metadata.create_all(app.state.engine)
+            if onprem:
+                @app.get("/_test_only/onprem/ready")
+                def onprem_ready():
+                    identifier = next(reversed(transport.tokens))
+                    local = TestClient(app, base_url="http://127.0.0.1:8001")
+                    try:
+                        result = local.post(f"/api/onprem/environments/{identifier}/ready", json={
+                            "token": transport.tokens[identifier], "public_ip": "3.38.88.141"})
+                        if result.status_code != 202:
+                            return JSONResponse({"error": "test report rejected"}, status_code=result.status_code)
+                    finally:
+                        local.close()
+                    return RedirectResponse("/#onprem")
             if deploy:
                 @app.get("/_test_only/fail-next-destroy")
                 def fail_next_destroy():

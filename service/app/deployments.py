@@ -14,13 +14,13 @@ from fastapi import HTTPException
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
-from .db import AwsEnvironment, DeployJob, Deployment
+from .db import AwsEnvironment, DeployJob, Deployment, OnpremEnvironment
 from .deploy_state import assign_env_id
 
 LEASE_SECONDS = 30 * 60
 ACTIVE = ("queued", "running")
-ACTIONS = ("deploy", "destroy")
-REAL_SETS = ("aws-always-on",)  # 실제로 배포할 수 있는 세트(aws-serverless는 아직 없다)
+ACTIONS = ("deploy", "destroy", "status", "rollback")
+REAL_SETS = ("aws-always-on", "onprem")
 MAX_EVENTS, KEEP_FIRST, MAX_MESSAGE = 400, 100, 500
 OMITTED = "(중간 로그 일부 생략)"
 
@@ -39,23 +39,40 @@ def _failure(code: str, message: str, retryable: bool = True) -> str:
     return json.dumps({"ok": False, "error": {"code": code, "message": message, "retryable": retryable}}, ensure_ascii=False)
 
 
-def select_target(session, project_id: str, environment: AwsEnvironment, set_name: str) -> Deployment:
+def select_target(session, project_id: str, environment: AwsEnvironment | OnpremEnvironment, set_name: str) -> Deployment:
     """프로젝트가 배포될 환경과 세트를 정한다. 한 번도 배포한 적이 없고 진행 중인 작업이 없을 때만 바꿀 수 있다."""
-    if environment.status != "CONNECTED" or not environment.role_arn:
+    onprem = isinstance(environment, OnpremEnvironment)
+    if onprem:
+        from .onprem_transport import environment as to_adapter
+        to_adapter(environment)
+        changed = session.execute(update(OnpremEnvironment).where(OnpremEnvironment.id == environment.id,
+            OnpremEnvironment.deleted_at.is_(None), OnpremEnvironment.status == "VERIFIED",
+            OnpremEnvironment.active_job_id.is_(None)).values(
+                lease_until=OnpremEnvironment.lease_until))
+        if changed.rowcount != 1:
+            session.rollback()
+            raise _error("environment_busy", "환경의 다른 작업이 진행 중입니다.")
+    elif environment.status != "CONNECTED" or not environment.role_arn:
         raise _error("environment_not_connected", "AWS 연결이 확인된 환경만 선택할 수 있습니다.")
-    if set_name not in REAL_SETS:
+    if set_name != ("onprem" if onprem else "aws-always-on"):
         raise _error("set_not_supported", "아직 지원하지 않는 배포 방식입니다.", 422)
     target = session.get(Deployment, project_id)
-    if target and (target.aws_environment_id, target.set_name) == (environment.id, set_name):
+    field = "onprem_environment_id" if onprem else "aws_environment_id"
+    fields = {"onprem_environment_id": environment.id if onprem else None,
+              "aws_environment_id": None if onprem else environment.id}
+    if target and (getattr(target, field), target.set_name) == (environment.id, set_name):
+        session.commit()
         return target
-    assign_env_id(session, environment)
+    if not onprem:
+        assign_env_id(session, environment)
     if target is None:
-        target = Deployment(project_id=project_id, aws_environment_id=environment.id, set_name=set_name)
+        target = Deployment(project_id=project_id, **fields, set_name=set_name)
         session.add(target)
     else:
         changed = session.execute(update(Deployment).where(
             Deployment.project_id == project_id, Deployment.active_job_id.is_(None), Deployment.image_tag == "",
-        ).values(aws_environment_id=environment.id, set_name=set_name))
+            Deployment.app_name == "",
+        ).values(**fields, set_name=set_name))
         if changed.rowcount != 1:
             session.rollback()
             raise _error("target_in_use", "이미 배포했거나 진행 중인 작업이 있어 환경을 바꿀 수 없습니다.")
@@ -89,15 +106,19 @@ def claim(session, project_id: str, request_id, runtime_id: str, *, action: str 
     target = session.get(Deployment, project_id)
     if target is None:
         raise _error("target_required", "배포할 환경을 먼저 선택해 주세요.")
-    if action == "destroy":
-        if not target.image_tag:
+    if action in ("destroy", "status", "rollback"):
+        if not target.image_tag and not (action == "destroy" and target.onprem_environment_id and target.app_name):
             raise _error("not_deployed", "배포된 앱이 없어 지울 것이 없습니다.")
-        image_tag = target.image_tag
+        if action != "rollback":
+            image_tag = target.image_tag
     if target.active_job_id and target.lease_until <= now:  # 만료된 선점: 죽은 작업을 중단으로 정리한다
         session.execute(update(DeployJob).where(DeployJob.id == target.active_job_id, DeployJob.status.in_(ACTIVE)).values(
             status="interrupted", finished_at=now * 1000,
             result_json=_failure("lease_expired", "작업이 제한 시간 안에 끝나지 않아 중단 처리했습니다.")))
     identifier = str(uuid.uuid4())
+    if target.onprem_environment_id:
+        from .onprem_state import acquire
+        acquire(session, target.onprem_environment_id, identifier, now)
     claimed = session.execute(update(Deployment).where(
         Deployment.project_id == project_id, or_(Deployment.active_job_id.is_(None), Deployment.lease_until <= now),
     ).values(active_job_id=identifier, lease_until=now + LEASE_SECONDS))
@@ -118,6 +139,8 @@ def claim(session, project_id: str, request_id, runtime_id: str, *, action: str 
 
 
 def extend_lease(session, job_id: str, *, now: int | None = None) -> None:
+    from .onprem_state import extend
+    extend(session, job_id)
     now = int(time.time()) if now is None else now
     session.execute(update(Deployment).where(Deployment.active_job_id == job_id).values(lease_until=now + LEASE_SECONDS))
     session.commit()
@@ -139,6 +162,8 @@ def finish(session, job_id: str, *, ok: bool, result: dict, stage: str = "", dep
     if ok and deployed:
         values.update(image_tag=deployed["image_tag"], url=deployed["url"], app_name=deployed["app_name"])
     session.execute(update(Deployment).where(Deployment.active_job_id == job_id).values(**values))
+    from .onprem_state import release
+    release(session, job_id)
     session.commit()
     return True
 
@@ -149,6 +174,11 @@ def interrupt_all(session, code: str, message: str, *, now: int | None = None) -
     stopped = session.execute(update(DeployJob).where(DeployJob.status.in_(ACTIVE)).values(
         status="interrupted", finished_at=now * 1000, result_json=_failure(code, message)))
     session.execute(update(Deployment).where(Deployment.active_job_id.is_not(None)).values(active_job_id=None, lease_until=0))
+    from .db import OnpremJob
+    session.execute(update(OnpremJob).where(OnpremJob.status.in_(ACTIVE)).values(
+        status="interrupted", finished_at=now * 1000, result_json=_failure(code, message)))
+    session.execute(update(OnpremEnvironment).where(OnpremEnvironment.active_job_id.is_not(None)).values(
+        active_job_id=None, lease_until=0))
     session.commit()
     return stopped.rowcount
 
@@ -163,6 +193,9 @@ def clear_real_targets(session, *, project_id: str | None = None, environment_id
         if session.scalar(select(Deployment.project_id).where(Deployment.aws_environment_id == environment_id)):
             raise HTTPException(409, {"code": "environment_in_use", "message": "배포 대상으로 사용 중인 환경입니다. 프로젝트의 배포 기록을 먼저 정리해 주세요."})
     if project_id is not None:
+        if session.scalar(select(Deployment.project_id).where(Deployment.project_id == project_id,
+            Deployment.onprem_environment_id.is_not(None), Deployment.app_name != "")):
+            raise HTTPException(409, {"code": "onprem_app_remaining", "message": "온프레미스 앱을 먼저 제거한 뒤 프로젝트 연결을 삭제하세요."})
         session.execute(delete(Deployment).where(
             Deployment.project_id == project_id, or_(Deployment.active_job_id.is_(None), Deployment.lease_until <= now)))
         if session.scalar(select(Deployment.project_id).where(Deployment.project_id == project_id)):

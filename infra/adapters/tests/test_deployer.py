@@ -37,6 +37,8 @@ class Parts:
         self.deploy_raises = None
         self.destroys, self.destroy_result, self.destroy_raises = [], None, None
         self.destroy_message = "앱 디렉터리를 지우는 중"
+        self.check_message, self.checks_raise = "접속하는 중", None
+        self.cleanups, self.cleanup_result, self.cleanup_raises = [], None, None
         self.runner_reads = ["ok"]
 
 
@@ -74,7 +76,9 @@ def make_deployer(parts, *, runner=True, kinds=("aws-always-on", "onprem"), dns=
         def check(self, env, log):
             parts.order.append("check")
             parts.checks.append(env)
-            log(LogEvent(step=1, total=5, name="접속 확인", message="접속하는 중"))
+            log(LogEvent(step=1, total=5, name="접속 확인", message=parts.check_message))
+            if parts.checks_raise:
+                raise parts.checks_raise
             return parts.check_result or CheckResult(ok=True)
 
         def deploy(self, env, spec, image_tag, secrets, log, *, set_name):
@@ -93,7 +97,18 @@ def make_deployer(parts, *, runner=True, kinds=("aws-always-on", "onprem"), dns=
                 raise parts.destroy_raises
             return parts.destroy_result or DestroyResult(ok=True)
 
-    adapters = {name: Adapter() for name in kinds}
+    class OnpremLike(Adapter):
+        """환경 단위 정리(DNS)를 가진 어댑터. AWS 어댑터는 이 함수가 없다."""
+
+        def remove_environment_dns(self, env, log):
+            parts.order.append("remove_environment")
+            parts.cleanups.append(env)
+            log(LogEvent(step=1, total=1, name="DNS 제거", message="환경의 DNS 레코드를 지우는 중"))
+            if parts.cleanup_raises:
+                raise parts.cleanup_raises
+            return parts.cleanup_result or DestroyResult(ok=True)
+
+    adapters = {name: (OnpremLike() if name == "onprem" else Adapter()) for name in kinds}
     kwargs = dict(runner=Runner(), foundation=SETTINGS) if runner else {}
     return Deployer(adapters, Builder(), dns=dns, **kwargs)
 
@@ -445,3 +460,117 @@ def test_secret_looking_values_in_the_adapters_destroy_logs_are_masked():
     parts.destroy_message = f"ssh 출력: token={token}"
     _, _, log = destroy(parts)
     assert token not in " ".join(e.message for e in log.events) and "***" in log.events[0].message
+
+
+# --- 연결 확인(등록할 때) --------------------------------------------------------------------
+def check(parts=None, env=ONPREM_ENV, set_name="onprem", **options):
+    parts = parts or Parts()
+    log = Log()
+    result = make_deployer(parts, **options).check(env, log, set_name=set_name)
+    return result, parts, log
+
+
+def test_a_registration_check_asks_the_adapter_and_hands_back_what_it_found():
+    parts = Parts()
+    parts.check_result = CheckResult(ok=True, details={"public_ip": "203.0.113.5"})
+    result, parts, _ = check(parts)
+    assert result.ok and result.details == {"public_ip": "203.0.113.5"} and parts.order == ["check"]
+    assert parts.checks == [ONPREM_ENV]
+
+
+def test_a_registration_check_touches_nothing_else():
+    parts = Parts()
+    result, parts, _ = check(parts, dns=FakeDns(parts))
+    assert parts.order == ["check"]  # 빌드, 기반 읽기, DNS, 배포를 하지 않는다
+
+
+def test_the_check_logs_are_one_stage_with_the_adapters_numbering_kept_in_the_message():
+    _, _, log = check()
+    assert [(e.step, e.total, e.name) for e in log.events] == [(1, 1, "연결 확인")]
+    assert log.events[0].message.startswith("[1/5] ")
+
+
+def test_a_failed_check_is_passed_on_unchanged_with_its_hint_and_logged_as_an_error():
+    parts = Parts()
+    parts.check_result = CheckResult(ok=False, error=err("docker_missing", "서버에 Docker가 없습니다.",
+                                                        hint="서버 준비 스크립트를 실행해 주세요."))
+    result, _, log = check(parts)
+    assert not result.ok and (result.error.code, result.error.hint) == ("docker_missing", "서버 준비 스크립트를 실행해 주세요.")
+    assert any(e.level == "error" and "Docker가 없습니다" in e.message for e in log.events)
+
+
+def test_an_unexpected_exception_in_a_check_is_reported_without_its_text():
+    parts = Parts()
+    parts.checks_raise = RuntimeError(f"leaked {USER_SECRET}")
+    result, _, log = check(parts)
+    assert result.error.code == "check_pipeline_error" and result.error.retryable
+    assert result.details == {"exception": "RuntimeError"}
+    assert USER_SECRET not in result.model_dump_json() and all(USER_SECRET not in e.message for e in log.events)
+
+
+@pytest.mark.parametrize("env, set_name", [(ONPREM_ENV, "aws-always-on"), (ENV, "onprem"), (ONPREM_ENV, "nope")])
+def test_a_check_refuses_a_set_that_does_not_fit_the_environment_and_never_calls_the_adapter(env, set_name):
+    result, parts, _ = check(env=env, set_name=set_name)
+    assert not result.ok and result.error.code == "set_not_supported" and parts.checks == []
+
+
+def test_secret_looking_values_in_the_adapters_check_logs_are_masked():
+    parts = Parts()
+    token = "gh" + "p_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+    parts.check_message = f"ssh 출력: token={token}"
+    _, _, log = check(parts)
+    assert token not in " ".join(e.message for e in log.events) and "***" in log.events[0].message
+
+
+# --- 환경 정리(환경을 지울 때) ---------------------------------------------------------------
+def remove_environment(parts=None, env=ONPREM_ENV, set_name="onprem", **options):
+    parts = parts or Parts()
+    log = Log()
+    result = make_deployer(parts, **options).remove_environment(env, log, set_name=set_name)
+    return result, parts, log
+
+
+def test_removing_an_environment_asks_the_adapter_to_clean_up_what_it_made_for_the_environment():
+    result, parts, _ = remove_environment()
+    assert result.ok and parts.order == ["remove_environment"] and parts.cleanups == [ONPREM_ENV]
+
+
+def test_removing_an_environment_does_not_destroy_apps_or_touch_dns_through_the_deployer():
+    parts = Parts()
+    _, parts, _ = remove_environment(parts, dns=FakeDns(parts))
+    assert parts.order == ["remove_environment"] and parts.destroys == []
+
+
+def test_the_environment_cleanup_logs_are_one_stage_with_the_adapters_numbering_kept_in_the_message():
+    _, _, log = remove_environment()
+    assert [(e.step, e.total, e.name) for e in log.events] == [(1, 1, "환경 정리")]
+    assert log.events[0].message.startswith("[1/1] ")
+
+
+def test_a_set_without_environment_level_cleanup_says_so_instead_of_pretending():
+    result, parts, _ = remove_environment(env=ENV, set_name="aws-always-on")
+    assert not result.ok and result.error.code == "remove_environment_unsupported" and not result.error.retryable
+    assert parts.cleanups == [] and parts.destroys == []
+
+
+def test_a_failed_environment_cleanup_is_passed_on_unchanged_and_logged_as_an_error():
+    parts = Parts()
+    parts.cleanup_result = DestroyResult(ok=False, error=err("dns_change_failed", "DNS 레코드를 바꾸지 못했습니다.",
+                                                             hint="권한을 확인해 주세요.", retryable=True))
+    result, _, log = remove_environment(parts)
+    assert not result.ok and (result.error.code, result.error.retryable) == ("dns_change_failed", True)
+    assert any(e.level == "error" for e in log.events)
+
+
+def test_an_unexpected_exception_in_an_environment_cleanup_is_reported_without_its_text():
+    parts = Parts()
+    parts.cleanup_raises = RuntimeError(f"leaked {USER_SECRET}")
+    result, _, _ = remove_environment(parts)
+    assert result.error.code == "remove_environment_pipeline_error" and result.details == {"exception": "RuntimeError"}
+    assert USER_SECRET not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("env, set_name", [(ONPREM_ENV, "aws-always-on"), (ENV, "onprem"), (ONPREM_ENV, "nope")])
+def test_an_environment_cleanup_refuses_a_set_that_does_not_fit_the_environment(env, set_name):
+    result, parts, _ = remove_environment(env=env, set_name=set_name)
+    assert not result.ok and result.error.code == "set_not_supported" and parts.cleanups == []

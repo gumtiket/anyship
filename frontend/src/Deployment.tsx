@@ -10,18 +10,18 @@ type Target = {
   environment_id: string; environment_name: string; set_name: string; app_name: string; image_tag: string;
   url: string; deployed: boolean; active_job_id: string | null; busy: boolean;
 };
-type Environment = { id: string; name: string; region: string; available: boolean };
+type Environment = { id: string; name: string; region: string; available: boolean; set_name: string };
 type Overview = { target: Target | null; sets: string[]; environments: Environment[] };
 type Job = {
-  id: string; request_id: string; action: 'deploy' | 'destroy'; set_name: string; image_tag: string; status: string; stage: string;
+  id: string; request_id: string; action: 'deploy' | 'destroy' | 'status' | 'rollback'; set_name: string; image_tag: string; status: string; stage: string;
   created_at: number;
   logs: { step: number; total: number; name: string; message: string; level: string }[];
-  result: { ok?: boolean; url?: string; error?: { message: string; hint?: string | null; retryable?: boolean } };
+  result: { ok?: boolean; state?: string; url?: string; error?: { message: string; hint?: string | null; retryable?: boolean } };
 };
 type Secret = { key: number; name: string; value: string };
 
-const sets: Record<string, string> = { 'aws-always-on': 'AWS 상시 실행' };
-const actions: Record<string, string> = { deploy: '배포', destroy: '배포 제거' };
+const sets: Record<string, string> = { 'aws-always-on': 'AWS 상시 실행', onprem: '온프레미스' };
+const actions: Record<string, string> = { deploy: '배포', destroy: '배포 제거', status: '상태 확인', rollback: '롤백' };
 const states: Record<string, string> = { queued: '대기', running: '진행 중', succeeded: '성공', failed: '실패', interrupted: '중단' };
 const stages: Record<string, string> = {
   source: '소스 확인', spec: '배포 명세 검사', build: '이미지 빌드', foundation: '공용 기반 확인', check: '연결 확인',
@@ -41,11 +41,13 @@ export function Deployment({ projectId, csrf, mode, onError }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [rollbackTag, setRollbackTag] = useState('');
   const mounted = useRef(false);
   const inFlight = useRef(false);
   const nextKey = useRef(0);
   const pending = useRef<{ key: string; requestId: string } | null>(null);
   const target = overview?.target;
+  const selectedSet = overview?.environments.find(item => item.id === environmentId)?.set_name ?? target?.set_name ?? 'aws-always-on';
   const active = Boolean(target?.active_job_id || jobs.some(job => ['queued', 'running'].includes(job.status)));
   const waiting = busy || active;
   const dirty = !target || target.environment_id !== environmentId;
@@ -86,7 +88,7 @@ export function Deployment({ projectId, csrf, mode, onError }: {
     if (inFlight.current) return;
     inFlight.current = true; setBusy(true); setError(''); setNotice('');
     try {
-      await api(endpoint, mutation(csrf, { environment_id: environmentId, set_name: overview?.sets[0] ?? 'aws-always-on' }, 'PUT'));
+      await api(endpoint, mutation(csrf, { environment_id: environmentId, set_name: selectedSet }, 'PUT'));
       await refresh(); setNotice('배포할 환경을 저장했습니다.');
     } catch (e) { report(e); }
     finally { inFlight.current = false; setBusy(false); }
@@ -131,21 +133,34 @@ export function Deployment({ projectId, csrf, mode, onError }: {
     } finally { inFlight.current = false; setBusy(false); }
   }
   function edit(key: number, change: Partial<Secret>) { setSecrets(items => items.map(item => item.key === key ? { ...item, ...change } : item)); }
+  async function lifecycle(action: 'status' | 'rollback') {
+    if (inFlight.current || !target) return;
+    inFlight.current = true; setBusy(true); setError('');
+    const imageTag = action === 'rollback' ? rollbackTag.trim() : '';
+    const key = JSON.stringify([action, target.environment_id, imageTag]);
+    if (pending.current?.key !== key) pending.current = { key, requestId: crypto.randomUUID() };
+    try {
+      const accepted = await api<Job>(endpoint + '/jobs', mutation(csrf, {
+        request_id: pending.current.requestId, action, image_tag: imageTag,
+      }));
+      pending.current = null; setSelectedJob(accepted.id); await refresh();
+    } catch (e) { report(e); } finally { inFlight.current = false; setBusy(false); }
+  }
 
   if (mode !== 'real') return null;
   const connectable = overview?.environments.filter(item => item.available) ?? [];
   return <section className="panel mock-deployment" aria-label="배포">
-    <div className="panel-heading"><h2><Rocket size={19}/> 배포</h2><span className="mock-badge">내 AWS 계정에 배포</span></div>
-    <p className="mock-description">연결한 AWS 계정에 이미지를 만들어 올리고 공개 주소를 받습니다. 첫 배포는 서버와 DB를 새로 만드느라 약 20분이 걸릴 수 있습니다.</p>
+    <div className="panel-heading"><h2><Rocket size={19}/> 배포</h2><span className="mock-badge">{sets[selectedSet]}</span></div>
+    <p className="mock-description">{selectedSet === 'onprem' ? '연결이 확인된 내 서버에 앱을 배포하고 공개 주소를 받습니다.' : '연결한 AWS 계정에 이미지를 만들어 올리고 공개 주소를 받습니다. 첫 배포는 서버와 DB를 새로 만드느라 약 20분이 걸릴 수 있습니다.'}</p>
     {error && <div className="error" role="alert">{error}</div>}
     {notice && <p className="mock-notice" role="status"><Check size={15}/>{notice}</p>}
     {!overview ? <p role="status">{error ? '잠시 후 다시 불러와 주세요.' : '배포 정보를 불러오고 있습니다.'}</p> : <>
-      {connectable.length === 0 ? <p className="quiet">연결이 확인된 AWS 환경이 없습니다. <a className="text-link" href="#aws">AWS 환경에서 연결을 먼저 완료하세요.</a></p> : <>
+      {connectable.length === 0 ? <p className="quiet">연결이 확인된 환경이 없습니다. <a className="text-link" href="#aws">AWS 환경</a> 또는 <a className="text-link" href="#onprem">온프레미스 환경</a>에서 연결을 먼저 완료하세요.</p> : <>
         <div className="mock-fields">
           <label>배포할 환경<select aria-label="배포할 환경" value={environmentId} disabled={waiting || Boolean(target?.deployed)} onChange={event => setEnvironmentId(event.target.value)}>
             {overview.environments.map(item => <option key={item.id} value={item.id} disabled={!item.available}>{item.name} · {item.region}{item.available ? '' : ' · 연결 확인 필요'}</option>)}
           </select>{target?.deployed && <small>한 번 배포한 뒤에는 환경을 바꿀 수 없습니다.</small>}</label>
-          <label>배포 방식<select aria-label="배포 방식" value={overview.sets[0]} disabled>{overview.sets.map(name => <option key={name} value={name}>{sets[name] ?? name}</option>)}</select></label>
+          <label>배포 방식<select aria-label="배포 방식" value={selectedSet} disabled>{overview.sets.map(name => <option key={name} value={name}>{sets[name] ?? name}</option>)}</select></label>
         </div>
         <div className="mock-toolbar"><button className="secondary" disabled={waiting || !dirty || !environmentId} onClick={() => void save()}>배포 환경 저장</button>
           {dirty && <span className="quiet">선택한 환경을 저장해 주세요.</span>}</div>
@@ -172,8 +187,12 @@ export function Deployment({ projectId, csrf, mode, onError }: {
           {waiting && <span role="status"><LoaderCircle size={15} className="spin"/> 작업을 진행하고 있습니다. 창을 닫아도 계속 진행됩니다.</span>}
         </div>
         {target.deployed && <div className="mock-lifecycle">
+          {target.set_name === 'onprem' && <div className="mock-toolbar"><button className="secondary" disabled={waiting || dirty} onClick={() => void lifecycle('status')}>앱 상태 확인</button>
+            <label>롤백할 커밋 SHA<input aria-label="롤백할 커밋 SHA" value={rollbackTag} disabled={waiting} onChange={event => setRollbackTag(event.target.value)} maxLength={40}/></label>
+            <button className="secondary" disabled={waiting || dirty || !/^[0-9a-f]{7,40}$/.test(rollbackTag.trim())} onClick={() => void lifecycle('rollback')}>이 버전으로 롤백</button>
+            <p className="quiet">서버에 남은 이미지로 되돌립니다. DB 스키마는 되돌리지 않습니다.</p></div>}
           <DeleteRegistration label="배포 제거" name={target.url || target.app_name} disabled={waiting || dirty}
-            description="이 앱의 컨테이너와 서버의 앱 폴더를 지웁니다. 앱 데이터베이스(DB)와 공용 기반(호스트, RDS)은 AWS 계정에 남아 요금이 계속 나옵니다. AnyShip의 프로젝트 연결은 유지되고 다시 배포할 수 있습니다."
+            description={target.set_name === 'onprem' ? '이 앱의 컨테이너·볼륨·파일을 삭제합니다. 앱의 데이터도 삭제되므로 필요한 백업을 먼저 확보하세요. 서버와 환경 DNS는 유지됩니다.' : '이 앱의 컨테이너와 서버의 앱 폴더를 지웁니다. 앱 데이터베이스(DB)와 공용 기반(호스트, RDS)은 AWS 계정에 남아 요금이 계속 나옵니다. AnyShip의 프로젝트 연결은 유지되고 다시 배포할 수 있습니다.'}
             onDelete={removeApp}/>
         </div>}
       </>}
@@ -185,7 +204,8 @@ export function Deployment({ projectId, csrf, mode, onError }: {
           {job && <div className="mock-job-detail" aria-live="polite"><strong>{actions[job.action] ?? '배포'} · {states[job.status] ?? job.status}</strong>
             {job.status === 'failed' && job.stage && <p>실패한 단계: <strong>{stages[job.stage] ?? job.stage}</strong></p>}
             {job.result.error && <div className="error" role="alert"><div>{job.result.error.message}{job.result.error.hint && <small>{job.result.error.hint}</small>}</div></div>}
-            {job.status === 'succeeded' && job.action === 'destroy' && <p>배포를 제거했습니다. 앱 DB와 공용 기반은 남아 있습니다.</p>}
+            {job.status === 'succeeded' && job.action === 'destroy' && <p>{job.set_name === 'onprem' ? '앱과 볼륨을 제거했습니다. 서버와 환경 DNS는 유지됩니다.' : '배포를 제거했습니다. 앱 DB와 공용 기반은 남아 있습니다.'}</p>}
+            {job.status === 'succeeded' && job.action === 'status' && <p>앱 상태: {job.result.state}</p>}
             {job.status === 'succeeded' && job.action !== 'destroy' && job.result.url && <p>배포 완료: <a className="deploy-url" href={job.result.url} target="_blank" rel="noopener noreferrer">{job.result.url} <ExternalLink size={13}/></a></p>}
             <DeploymentLogs key={job.id} logs={job.logs}/>
             {job.status === 'queued' && <p>작업 순서를 기다리고 있습니다.</p>}

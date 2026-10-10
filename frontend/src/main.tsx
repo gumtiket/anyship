@@ -6,12 +6,13 @@ import './workflow.css';
 import { ChangeWorkflow } from './ChangeWorkflow';
 import { RepositoryConnect } from './RepositoryConnect';
 import { AwsEnvironments } from './AwsEnvironments';
+import { OnpremEnvironments } from './OnpremEnvironments';
 import { DeleteRegistration } from './DeleteRegistration';
 import { MockDeployment } from './MockDeployment';
 import { Deployment } from './Deployment';
 import { api, ApiError, mutation, type ConnectionDraft, type Project } from './api';
 
-type Config = { demo: boolean; github_configured: boolean; ai_mode: string; ai_provider: string; aws_available: boolean; aws_regions: string[]; deployment_mode: string };
+type Config = { demo: boolean; github_configured: boolean; ai_mode: string; ai_provider: string; aws_available: boolean; aws_regions: string[]; deployment_mode: string; onprem_available: boolean };
 type Me = { user: { name: string; login: string }; workspace: { id: string; name: string }; csrf_token: string };
 const authErrors: Record<string, string> = {
   incorrect_client_credentials: '현재 GitHub 로그인 연결에 문제가 있습니다. 잠시 후 다시 시도하고, 반복되면 서비스 관리자에게 알려주세요.',
@@ -28,7 +29,7 @@ const initialQuery = new URLSearchParams(location.search);
 const returnedFromGitHub = initialQuery.has('setup_action') || initialQuery.has('installation_id') || initialQuery.has('state');
 const isAwsRoute = (value: string) => value === 'aws' || /^aws\/[0-9a-f-]{36}$/i.test(value);
 function readLoginRoute() {
-  try { const value = sessionStorage.getItem('anyship.login-route') || ''; return isAwsRoute(value) ? value : ''; }
+  try { const value = sessionStorage.getItem('anyship.login-route') || ''; return isAwsRoute(value) || value === 'onprem' ? value : ''; }
   catch { return ''; }
 }
 const loginRoute = readLoginRoute();
@@ -44,7 +45,7 @@ function App() {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState('');
   const detail = route.startsWith('project/') ? projects.find(p => p.id === route.slice(8)) : null;
-  const screen = isAwsRoute(route) ? 'aws' : route === 'connect' ? 'connect' : route.startsWith('project/') ? 'detail' : 'projects';
+  const screen = route === 'onprem' ? 'onprem' : isAwsRoute(route) ? 'aws' : route === 'connect' ? 'connect' : route.startsWith('project/') ? 'detail' : 'projects';
 
   function navigate(next: string) { setRoute(next); location.hash = next; setError(''); }
   function sessionError(e: unknown) {
@@ -114,17 +115,17 @@ function App() {
       <div className="intro-steps"><span><Github size={18}/> 저장소 연결</span><ChevronRight size={14}/><span><Sparkles size={18}/> 분석 · 수정</span><ChevronRight size={14}/><span><GitPullRequest size={18}/> 변경 검토 · PR</span></div>
       <div className="soon-note">{config?.ai_mode === 'placeholder' ? '현재는 테스트 모드입니다. AI 대신 안내 파일을 추가해 실제 PR 흐름을 확인합니다.' : config?.ai_mode === 'bronze' ? '저장소를 연결하고 AI 분석·변경안 검토를 시작하세요.' : 'AI 분석 기능은 준비 중입니다. 저장소 연결부터 시작할 수 있습니다.'}</div></section>
       <section className="login-card"><div className="icon-box"><Github size={26}/></div><h2>AnyShip 시작하기</h2><p>GitHub 계정으로 가입하고 로그인합니다.<br/>다음 단계에서 저장소 주소를 입력하세요.</p>{alert}
-        {config?.github_configured && !config.demo ? <a className="primary full" href="/api/auth/github/start" onClick={() => { try { if (isAwsRoute(route)) sessionStorage.setItem('anyship.login-route', route); } catch { /* Login remains available without storage. */ } }}><Github size={18}/> GitHub로 시작하기</a> : <><button className="primary full" disabled>현재 로그인 준비 중입니다</button><p className="helper">서비스 연결을 준비하고 있습니다. 잠시 후 다시 방문해 주세요.</p></>}
+        {config?.github_configured && !config.demo ? <a className="primary full" href="/api/auth/github/start" onClick={() => { try { if (isAwsRoute(route) || route === 'onprem') sessionStorage.setItem('anyship.login-route', route); } catch { /* Login remains available without storage. */ } }}><Github size={18}/> GitHub로 시작하기</a> : <><button className="primary full" disabled>현재 로그인 준비 중입니다</button><p className="helper">서비스 연결을 준비하고 있습니다. 잠시 후 다시 방문해 주세요.</p></>}
         <div className="login-foot"><ShieldCheck size={16}/> 원하는 저장소만 연결할 수 있습니다.</div>
       </section></main><footer className="landing-footer">AnyShip<span>GitHub 연결 · 변경 검토 · Draft PR</span></footer>
   </div>;
 
   return <div className="shell"><aside className="sidebar"><div className="sidebar-content"><Brand/><div className="workspace-avatar"><span>{me.user.login.slice(0, 1).toUpperCase()}</span><div><strong>개인 워크스페이스</strong><small>@{me.user.login}</small></div></div>
-    <div className="nav-label">WORKSPACE</div><nav><button className={screen === 'projects' || screen === 'detail' ? 'active' : ''} onClick={() => navigate('projects')}><Layers3 size={18}/> 프로젝트 <span className="count">{projects.length}</span></button><button className={screen === 'connect' ? 'active' : ''} onClick={() => navigate('connect')}><Github size={18}/> 저장소 연결</button><button className={screen === 'aws' ? 'active' : ''} onClick={() => navigate('aws')}><Cloud size={18}/> AWS 환경</button></nav>
+    <div className="nav-label">WORKSPACE</div><nav><button className={screen === 'projects' || screen === 'detail' ? 'active' : ''} onClick={() => navigate('projects')}><Layers3 size={18}/> 프로젝트 <span className="count">{projects.length}</span></button><button className={screen === 'connect' ? 'active' : ''} onClick={() => navigate('connect')}><Github size={18}/> 저장소 연결</button><button className={screen === 'aws' ? 'active' : ''} onClick={() => navigate('aws')}><Cloud size={18}/> AWS 환경</button><button className={screen === 'onprem' ? 'active' : ''} onClick={() => navigate('onprem')}><Cloud size={18}/> 온프레미스 환경</button></nav>
     </div><div className="sidebar-foot"><div className="local-status">{config?.ai_mode === 'placeholder' ? '테스트 모드 · AI 임시 항목 사용' : config?.ai_mode === 'bronze' ? 'AI 분석 연결됨' : 'AI 분석 기능 준비 중'}</div><button className="logout" disabled={busy} onClick={logout}><LogOut size={16}/> 로그아웃</button></div></aside>
-    <div className="main-area"><header className="app-header"><span>개인 워크스페이스 <ChevronRight size={14}/> {screen === 'aws' ? 'AWS 환경' : screen === 'projects' ? '프로젝트' : screen === 'connect' ? '저장소 연결' : detail?.full_name.split('/').pop() ?? '프로젝트'}</span><span className="avatar">{me.user.name.slice(0, 1)}</span></header>
+    <div className="main-area"><header className="app-header"><span>개인 워크스페이스 <ChevronRight size={14}/> {screen === 'onprem' ? '온프레미스 환경' : screen === 'aws' ? 'AWS 환경' : screen === 'projects' ? '프로젝트' : screen === 'connect' ? '저장소 연결' : detail?.full_name.split('/').pop() ?? '프로젝트'}</span><span className="avatar">{me.user.name.slice(0, 1)}</span></header>
     <main className="content">{alert}
-      {screen === 'aws' ? <AwsEnvironments key={me.workspace.id + ':' + me.user.login} csrf={me.csrf_token} workspaceKey={me.workspace.id + ':' + me.user.login} environmentId={route.startsWith('aws/') ? route.slice(4) : null} onSelect={id => navigate(id ? 'aws/' + id : 'aws')} onError={sessionError}/> : !projectsReady ? <p role="status"><LoaderCircle size={16} className="spin"/> 내 프로젝트를 불러오고 있습니다.</p> : <>
+      {screen === 'onprem' ? <OnpremEnvironments key={me.workspace.id + ':' + me.user.login} csrf={me.csrf_token} available={config?.onprem_available ?? false} onError={sessionError}/> : screen === 'aws' ? <AwsEnvironments key={me.workspace.id + ':' + me.user.login} csrf={me.csrf_token} workspaceKey={me.workspace.id + ':' + me.user.login} environmentId={route.startsWith('aws/') ? route.slice(4) : null} onSelect={id => navigate(id ? 'aws/' + id : 'aws')} onError={sessionError}/> : !projectsReady ? <p role="status"><LoaderCircle size={16} className="spin"/> 내 프로젝트를 불러오고 있습니다.</p> : <>
         {screen === 'projects' && <><div className="page-heading"><div><span className="eyebrow">YOUR WORKSPACE</span><h1>내 프로젝트</h1><p>저장소에서 시작해 검토 가능한 PR까지.</p></div><button className="primary" onClick={() => navigate('connect')}><Plus size={17}/> 프로젝트 연결</button></div>
           {projects.length === 0 ? <div className="empty-state"><div className="empty-art"><FolderGit2 size={40}/><span className="tiny-plus">+</span></div><h2>첫 프로젝트를 연결해 보세요</h2><p>GitHub 저장소 주소만 준비하세요.<br/>접근 승인부터 브랜치 선택까지 안내합니다.</p><button className="primary" onClick={() => navigate('connect')}><Github size={18}/> 저장소 URL로 연결</button></div> : <div className="project-grid">{projects.map(project => <button className="project-card" key={project.id} onClick={() => navigate('project/' + project.id)}><div className="project-card-top"><FolderGit2 size={22}/><span className="status"><Check size={12}/> 등록됨</span></div><h2>{project.full_name.split('/').pop()}</h2><p>{project.full_name}</p><div className="project-card-bottom"><span><GitBranch size={14}/> {project.branch}</span><ArrowRight size={17}/></div></button>)}</div>}
           <div className="roadmap"><div><span className="step-number">01</span><h3>저장소 연결</h3><p>주소와 접근 권한을 확인합니다.</p></div><div><span className="step-number">02</span><h3>수정 항목 실행</h3><p>{config?.ai_mode === 'placeholder' ? '테스트에서는 임시 수정 항목을 사용합니다.' : config?.ai_mode === 'bronze' ? '진단 결과와 변경안을 함께 생성합니다.' : 'AI 분석 기능은 준비 중입니다.'}</p></div><div><span className="step-number">03</span><h3>변경 검토 · PR</h3><p>내용을 확인하고 GitHub에 제출합니다.</p></div></div>

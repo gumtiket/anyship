@@ -4,6 +4,8 @@ import ast
 import json
 import re
 
+import yaml
+
 from ai.credentials import (
     DUMMY_SECRET as DUMMY_SECRET,
 )
@@ -15,6 +17,51 @@ from ai.credentials import (
     secret_literals,
 )
 from ai.detectors.repo import RepoView, aliases, qualified
+
+
+def deployment_secret_flags(text: str) -> set[int]:
+    """Locate boolean env[].secret metadata, preserving quoted strings and credentials.
+
+    YAML nodes retain types and source positions without constructing custom objects.
+    Aliases must not exempt credential-looking lines elsewhere in the document.
+    """
+    try:
+        root = yaml.compose(text, Loader=yaml.SafeLoader)
+    except (yaml.YAMLError, RecursionError):
+        return set()
+    if not isinstance(root, yaml.MappingNode):
+        return set()
+    flags = set()
+    for key, env in root.value:
+        if (
+            key.value != "env"
+            or not isinstance(env, yaml.SequenceNode)
+            or env.start_mark.index <= key.start_mark.index
+        ):
+            continue
+        for item in env.value:
+            if not isinstance(item, yaml.MappingNode) or not (
+                env.start_mark.index <= item.start_mark.index < env.end_mark.index
+            ):
+                continue
+            if not any(
+                name.value == "name"
+                and isinstance(value, yaml.ScalarNode)
+                and value.tag == "tag:yaml.org,2002:str"
+                for name, value in item.value
+            ):
+                continue
+            for name, value in item.value:
+                if (
+                    name.value == "secret"
+                    and isinstance(value, yaml.ScalarNode)
+                    and value.tag == "tag:yaml.org,2002:bool"
+                    and value.style is None
+                    and value.value.lower() in {"true", "false"}
+                    and name.start_mark.line == value.start_mark.line
+                ):
+                    flags.add(name.start_mark.index)
+    return flags
 
 
 def node_span(source: str, node: ast.AST) -> tuple[int, int]:
@@ -133,13 +180,20 @@ class SourceMasker:
                 except (ValueError, RecursionError):
                     pass
             if file.endswith((".yaml", ".yml", ".toml", ".ini", ".cfg")):
-                values = re.findall(
-                    r"(?im)^\s*[\w.-]*(?:secret|password|token|key)[\w.-]*\s*[:=]\s*['\"]?([^\n]+)",
-                    text,
+                values = list(
+                    re.finditer(
+                        r"(?im)^\s*(?P<key>[\w.-]*(?:secret|password|token|key)[\w.-]*)"
+                        r"\s*[:=]\s*['\"]?(?P<value>[^\r\n]+)",
+                        text,
+                    )
                 )
                 if values or re.search(r"\w+://[^\s]+@", text):
                     self.blocked_files.add(file)
-                self._values.update(value.strip("'\" ") for value in values if value.strip("'\" "))
+                flags = deployment_secret_flags(text) if file == "deploy-spec.yaml" else set()
+                for match in values:
+                    value = match["value"].strip("'\" ")
+                    if value and match.start("key") not in flags:
+                        self._values.add(value)
 
     def source(self, repo: RepoView, file: str) -> str:
         text = repo.read(file)

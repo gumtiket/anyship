@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event
+from sqlalchemy import BigInteger, CheckConstraint, ForeignKey, Integer, String, Text, UniqueConstraint, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -199,13 +199,66 @@ class MockJob(Base):
     finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
+class OnpremEnvironment(Base):
+    __tablename__ = "onprem_environments"
+    __table_args__ = (UniqueConstraint("workspace_id", "created_by", "request_id", name="uq_onprem_request"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    request_id: Mapped[str] = mapped_column(String(36))
+    name: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str] = mapped_column(String(254))
+    env_id: Mapped[str] = mapped_column(String(21), unique=True)
+    connection_kind: Mapped[str] = mapped_column(String(24), default="ssh", server_default="ssh")
+    host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ssh_user: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    ssh_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    credential_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_seen_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    public_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="ISSUED")
+    error_code: Mapped[str] = mapped_column(String(64), default="")
+    active_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    deleted_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class OnpremRegistrationToken(Base):
+    __tablename__ = "onprem_registration_tokens"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    environment_id: Mapped[str] = mapped_column(ForeignKey("onprem_environments.id"), index=True)
+    expires_at: Mapped[int] = mapped_column(BigInteger)
+    used_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class OnpremJob(Base):
+    """Environment operations exist before a project selects this environment."""
+    __tablename__ = "onprem_jobs"
+    __table_args__ = (UniqueConstraint("environment_id", "request_id", name="uq_onprem_job_request"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    environment_id: Mapped[str] = mapped_column(ForeignKey("onprem_environments.id"), index=True)
+    request_id: Mapped[str] = mapped_column(String(36))
+    runtime_id: Mapped[str] = mapped_column(String(36))
+    action: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    logs_json: Mapped[str] = mapped_column(Text, default="[]")
+    result_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[int] = mapped_column(BigInteger)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
 class Deployment(Base):
-    """프로젝트가 실제로 배포되는 대상(모의 배포 `MockDeployment`와 별개). 지금은 AWS 환경만 지원한다."""
+    """프로젝트의 실제 AWS 또는 온프레미스 대상(모의 배포 `MockDeployment`와 별개)."""
     __tablename__ = "deployments"
+    __table_args__ = (CheckConstraint(
+        "(aws_environment_id IS NOT NULL AND onprem_environment_id IS NULL) OR "
+        "(aws_environment_id IS NULL AND onprem_environment_id IS NOT NULL)", name="ck_deployment_environment"),)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)
-    aws_environment_id: Mapped[str] = mapped_column(ForeignKey("aws_environments.id"), index=True)
+    aws_environment_id: Mapped[str | None] = mapped_column(ForeignKey("aws_environments.id"), index=True, nullable=True)
+    onprem_environment_id: Mapped[str | None] = mapped_column(ForeignKey("onprem_environments.id"), index=True, nullable=True)
     set_name: Mapped[str] = mapped_column(String(24))
-    app_name: Mapped[str] = mapped_column(String(63), default="")  # deploy-spec의 app. 첫 배포가 성공하면 채운다
+    app_name: Mapped[str] = mapped_column(String(63), default="")  # 온프레미스는 실패 후 정리를 위해 배포 시작 전에 저장한다
     image_tag: Mapped[str] = mapped_column(String(40), default="")  # 지금 실행 중인 버전
     url: Mapped[str] = mapped_column(String(512), default="")
     active_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
