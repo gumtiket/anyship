@@ -18,6 +18,7 @@ from .base import LogFn
 from .compose import render_stack
 from .compose_adapter import ComposeAdapter, _err, _ssh_error, _step
 from .compose_host import ComposeHost, wait_healthy
+from .data_transfer import RdsDbEndpoint, TransferInputError
 from .models import (AdapterError, AwsEnvironment, CheckResult, DeployResult, DestroyResult, LogEvent, Secrets,
                      Spec, StatusResult)
 from .rds_admin import database_url, db_name, ensure_app_database, password_from_url
@@ -42,12 +43,22 @@ def foundation_error(env: AwsEnvironment, needed: tuple[str, ...] = _FOUNDATION)
 class AwsAlwaysOnAdapter(ComposeAdapter):
     def __init__(self, key_path: Path, *, base_domain: str = "anyship.cloud", verify_tls: bool = True,
                  connect: Callable[[AwsEnvironment], tuple[SshRunner, ComposeHost]] | None = None,
-                 healthy=wait_healthy, access: AwsAccess | None = None):
+                 healthy=wait_healthy, access: AwsAccess | None = None, dns_managed: bool = False):
         super().__init__(key_path, base_domain=base_domain, verify_tls=verify_tls, connect=connect, healthy=healthy)
         self._access = access or AwsAccess()
+        # `Deployer`가 DNS 레코드를 자동으로 맞추는 환경이면 True(서비스의 APP_DEPLOY_DNS=on). 어댑터는 DNS를 만들지 않으므로 로그 문구만 바꾼다.
+        self._dns_managed = dns_managed
 
     def _address(self, env: AwsEnvironment, app: str) -> str:
         return f"{app}.{env.env_id}.aws.{self._domain}"
+
+    def data_endpoint(self, env: AwsEnvironment, app: str) -> RdsDbEndpoint:
+        """앱의 DB(공용 RDS 안의 앱 전용 DB)에 닿는 방법. 호스트가 있어야 한다. 데이터 이전이 쓴다."""
+        error = foundation_error(env, _HOST_ONLY)
+        if error:
+            raise TransferInputError(error)
+        ssh, host = self._connect(env)
+        return RdsDbEndpoint(ssh, host, app)
 
     def check(self, env: AwsEnvironment, log: LogFn) -> CheckResult:
         total = 5
@@ -174,14 +185,18 @@ class AwsAlwaysOnAdapter(ComposeAdapter):
                                  hint="마이그레이션 명령과 데이터베이스 연결 설정을 확인해 주세요."), migrated)
         else:
             _step(safe, 7, total, "마이그레이션", "명세에 마이그레이션이 없어 건너뜁니다")
-        # DNS는 자동으로 만들지 않는다. 확인도 하지 않으므로 단계로 세지 않고 경고로 알린다.
-        safe(LogEvent(level="warn", message=f"{address}가 이 호스트({env.host})를 가리키는 DNS 레코드는 "
-                                            "미리 만들어 두어야 합니다(자동 생성 안 함)."))
+        # 어댑터는 DNS를 만들지도 확인하지도 않는다(그래서 단계로 세지 않는다). DNS 자동 관리가 켜져 있으면 배포기가 기반을 확인한 직후 이미 맞췄다.
+        if self._dns_managed:
+            safe(LogEvent(message=f"{address}의 DNS 레코드는 서비스가 환경 단위로 자동으로 맞춥니다."))
+        else:
+            safe(LogEvent(level="warn", message=f"{address}가 이 호스트({env.host})를 가리키는 DNS 레코드는 "
+                                                "미리 만들어 두어야 합니다(자동 생성 안 함)."))
         _step(safe, 8, total, "헬스체크", "공개 주소로 앱이 응답하는지 확인하는 중")
         healthy, status = self._healthy(f"https://{address}{parsed.healthcheck}", verify_tls=self._verify_tls)
         if not healthy:
             return fail(_err("healthcheck_failed", f"앱이 시작됐지만 헬스체크를 통과하지 못했습니다(마지막 응답: {status}).",
-                             hint="앱이 PORT 환경변수의 포트에서 요청을 받고 /healthz가 200을 반환하는지, "
+                             hint="호스트에서 앱 컨테이너가 계속 다시 시작되지 않는지(docker compose logs web), 앱이 PORT 환경변수의 포트에서 요청을 받고 "
+                                  "/healthz가 200을 반환하는지, Traefik이 인증서를 받았는지(docker logs traefik-traefik-1), "
                                   "*.<환경ID>.aws 도메인의 DNS 레코드가 호스트 IP를 가리키는지 확인해 주세요.",
                              retryable=True))
         return DeployResult(ok=True, url=f"https://{address}", image_tag=image_tag,

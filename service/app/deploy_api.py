@@ -35,7 +35,9 @@ class TargetInput(BaseModel):
 class JobInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: uuid.UUID
-    action: Literal["deploy", "destroy", "status", "rollback"] = "deploy"
+    action: Literal["deploy", "destroy", "status", "rollback", "migrate", "destroy_previous"] = "deploy"
+    target_environment_id: uuid.UUID | None = None  # migrate만: 옮겨 갈 환경
+    target_set_name: str = Field(default="", max_length=24)
     image_tag: str = Field(default="", max_length=40)
     secrets: dict[str, str] = Field(default_factory=dict, max_length=MAX_SECRETS)
 
@@ -49,8 +51,13 @@ class JobInput(BaseModel):
 
     @model_validator(mode="after")
     def destroy_takes_no_secrets(self):
-        if self.action != "deploy" and self.secrets:
+        if self.action not in ("deploy", "migrate") and self.secrets:
             raise ValueError("a destroy takes no secrets")  # 값은 오류에 싣지 않는다
+        if self.action == "migrate":
+            if self.target_environment_id is None or self.target_set_name not in REAL_SETS:
+                raise ValueError("a migration needs a target environment and set")
+        elif self.target_environment_id is not None or self.target_set_name:
+            raise ValueError("only a migration takes a target")
         if self.action == "rollback":
             if not re.fullmatch(r"[0-9a-f]{7,40}", self.image_tag):
                 raise ValueError("invalid rollback image tag")
@@ -83,7 +90,17 @@ def router(settings, runner, db, current, mutation, access_token=None):
         return {"environment_id": environment.id, "environment_name": environment.name,
                 "set_name": target.set_name, "app_name": target.app_name, "image_tag": target.image_tag,
                 "url": target.url, "deployed": bool(target.image_tag or (target.onprem_environment_id and target.app_name)), "active_job_id": target.active_job_id,
-                "busy": bool(target.active_job_id) and target.lease_until > int(time.time())}
+                "busy": bool(target.active_job_id) and target.lease_until > int(time.time()),
+                "previous": previous_json(session, target)}
+
+    def previous_json(session, target):
+        """환경 이전 뒤 원래 환경에 멈춘 채 남은 앱(없으면 None). 사용자가 확인하고 지울 때까지 보여 준다."""
+        if not target.previous_app_name:
+            return None
+        row = session.get(OnpremEnvironment if target.previous_kind == "onprem" else AwsEnvironment, target.previous_environment_id)
+        return {"kind": target.previous_kind, "environment_name": row.name if row else "(삭제된 환경)",
+                "set_name": "onprem" if target.previous_kind == "onprem" else "aws-always-on",
+                "app_name": target.previous_app_name, "url": target.previous_url}
 
     @routes.get("")
     def get(project_id: str, login=Depends(current), session=Depends(db)):
@@ -100,17 +117,22 @@ def router(settings, runner, db, current, mutation, access_token=None):
         return {"target": target_json(session, session.get(Deployment, project_id)),
                 "sets": list(REAL_SETS) if onprem else ["aws-always-on"], "environments": environments}
 
-    @routes.put("")
-    def save(project_id: str, body: TargetInput, login=Depends(mutation), session=Depends(db)):
-        project(session, login, project_id)
-        if body.set_name == "onprem" and getattr(runner, "onprem", None):
-            environment = session.scalar(select(OnpremEnvironment).where(OnpremEnvironment.id == str(body.environment_id),
+    def environment_for(session, login, environment_id, set_name):
+        """요청한 사용자가 소유한 환경을 찾는다(없으면 404)."""
+        if set_name == "onprem" and getattr(runner, "onprem", None):
+            environment = session.scalar(select(OnpremEnvironment).where(OnpremEnvironment.id == str(environment_id),
                 OnpremEnvironment.workspace_id == login.workspace_id, OnpremEnvironment.created_by == login.user_id,
                 OnpremEnvironment.deleted_at.is_(None)))
         else:
-            environment = session.scalar(owned_environments(session, login).where(AwsEnvironment.id == str(body.environment_id)))
+            environment = session.scalar(owned_environments(session, login).where(AwsEnvironment.id == str(environment_id)))
         if environment is None:
             fail(404, "environment_not_found", "환경을 찾을 수 없습니다.")
+        return environment
+
+    @routes.put("")
+    def save(project_id: str, body: TargetInput, login=Depends(mutation), session=Depends(db)):
+        project(session, login, project_id)
+        environment = environment_for(session, login, body.environment_id, body.set_name)
         try:
             return target_json(session, select_target(session, project_id, environment, body.set_name))
         except (DeploymentError, DeployStateError) as error:
@@ -140,6 +162,17 @@ def router(settings, runner, db, current, mutation, access_token=None):
                 if not target or not target.onprem_environment_id or not getattr(runner, "onprem", None):
                     fail(422, "action_not_supported", "이 환경에서는 지원하지 않는 작업입니다.")
                 created_job, created = runner.onprem.submit_project(session, row, body.request_id, body.action, image_tag=body.image_tag)
+            elif body.action in ("migrate", "destroy_previous"):
+                migration = getattr(runner, "migration", None)
+                if migration is None:
+                    fail(422, "action_not_supported", "이 서버에서는 환경 이전을 지원하지 않습니다.")
+                if body.action == "destroy_previous":
+                    created_job, created = migration.submit_destroy_previous(session, row, body.request_id)
+                else:
+                    destination = environment_for(session, login, body.target_environment_id, body.target_set_name)
+                    token = access_token(login) if access_token else None
+                    created_job, created = migration.submit_migrate(session, row, body.request_id, destination,
+                                                                    body.secrets, token)
             elif body.action == "destroy":
                 created_job, created = runner.submit_destroy(session, row, body.request_id)
             else:

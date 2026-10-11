@@ -263,6 +263,11 @@ class Deployment(Base):
     url: Mapped[str] = mapped_column(String(512), default="")
     active_job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     lease_until: Mapped[int] = mapped_column(BigInteger, default=0)  # 작업 선점의 만료(초). 20분짜리 작업을 덮는 TTL
+    # 환경 이전(`migrate`) 뒤 원래 환경에 멈춘 채 남은 앱. 사용자가 확인하고 지울 때까지 기록해 둔다(비어 있으면 없다).
+    previous_kind: Mapped[str] = mapped_column(String(8), default="", server_default="")  # "aws" 또는 "onprem"
+    previous_environment_id: Mapped[str] = mapped_column(String(36), default="", server_default="")
+    previous_app_name: Mapped[str] = mapped_column(String(63), default="", server_default="")
+    previous_url: Mapped[str] = mapped_column(String(512), default="", server_default="")
 
 
 class DeployJob(Base):

@@ -3,29 +3,32 @@ import { Check, ExternalLink, LoaderCircle, Plus, RefreshCw, Rocket, X } from 'l
 import { api, mutation } from './api';
 import { DeleteRegistration } from './DeleteRegistration';
 import { DeploymentLogs } from './DeploymentLogs';
+import { MigrateEnvironment, type MigrationTarget } from './MigrateEnvironment';
 import './mock-deployment.css';
 import './deployment.css';
 
+type Previous = { kind: string; environment_name: string; set_name: string; app_name: string; url: string };
 type Target = {
   environment_id: string; environment_name: string; set_name: string; app_name: string; image_tag: string;
-  url: string; deployed: boolean; active_job_id: string | null; busy: boolean;
+  url: string; deployed: boolean; active_job_id: string | null; busy: boolean; previous: Previous | null;
 };
 type Environment = { id: string; name: string; region: string; available: boolean; set_name: string };
 type Overview = { target: Target | null; sets: string[]; environments: Environment[] };
 type Job = {
-  id: string; request_id: string; action: 'deploy' | 'destroy' | 'status' | 'rollback'; set_name: string; image_tag: string; status: string; stage: string;
+  id: string; request_id: string; action: 'deploy' | 'destroy' | 'status' | 'rollback' | 'migrate' | 'destroy_previous'; set_name: string; image_tag: string; status: string; stage: string;
   created_at: number;
   logs: { step: number; total: number; name: string; message: string; level: string }[];
-  result: { ok?: boolean; state?: string; url?: string; error?: { message: string; hint?: string | null; retryable?: boolean } };
+  result: { ok?: boolean; state?: string; url?: string; error?: { message: string; hint?: string | null; retryable?: boolean };
+    details?: { target_left?: boolean; tables?: number; rows?: number; bytes?: number } };
 };
 type Secret = { key: number; name: string; value: string };
 
 const sets: Record<string, string> = { 'aws-always-on': 'AWS 상시 실행', onprem: '온프레미스' };
-const actions: Record<string, string> = { deploy: '배포', destroy: '배포 제거', status: '상태 확인', rollback: '롤백' };
+const actions: Record<string, string> = { deploy: '배포', destroy: '배포 제거', status: '상태 확인', rollback: '롤백', migrate: '환경 이전', destroy_previous: '이전 앱 삭제' };
 const states: Record<string, string> = { queued: '대기', running: '진행 중', succeeded: '성공', failed: '실패', interrupted: '중단' };
 const stages: Record<string, string> = {
   source: '소스 확인', spec: '배포 명세 검사', build: '이미지 빌드', foundation: '공용 기반 확인', check: '연결 확인',
-  deploy: '배포', destroy: '앱 삭제', environment: '환경 준비', runner: '실행기',
+  deploy: '배포', destroy: '앱 삭제', environment: '환경 준비', runner: '실행기', preflight: '원본 확인', transfer: '데이터 이전',
 };
 const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
 
@@ -60,7 +63,8 @@ export function Deployment({ projectId, csrf, mode, onError }: {
     const [current, history] = await Promise.all([api<Overview>(endpoint), api<Job[]>(endpoint + '/jobs')]);
     if (!mounted.current) return;
     setOverview(current); setJobs(history);
-    setEnvironmentId(value => value || current.target?.environment_id || current.environments.find(item => item.available)?.id || '');
+    setEnvironmentId(value => current.target?.deployed ? current.target.environment_id
+      : value || current.target?.environment_id || current.environments.find(item => item.available)?.id || '');
     if (history.some(item => item.request_id === pending.current?.requestId)) pending.current = null;
   }
   function report(e: unknown) {
@@ -132,6 +136,50 @@ export function Deployment({ projectId, csrf, mode, onError }: {
       throw e;
     } finally { inFlight.current = false; setBusy(false); }
   }
+  // 다른 환경으로 옮긴다. 확인 대화상자가 오류를 보여 주도록 실패는 다시 던진다. 비밀 값은 보낸 즉시 화면에서 지운다.
+  async function migrateTo(destination: MigrationTarget) {
+    if (inFlight.current || !target) return;
+    inFlight.current = true; setBusy(true); setError(''); setNotice('');
+    const body: Record<string, string> = {};
+    for (const item of secrets) if (item.name.trim()) body[item.name.trim()] = item.value;
+    const key = JSON.stringify(['migrate', target.environment_id, destination.id, body]);
+    if (pending.current?.key !== key) pending.current = { key, requestId: crypto.randomUUID() };
+    try {
+      const accepted = await api<Job>(endpoint + '/jobs', mutation(csrf, {
+        request_id: pending.current.requestId, action: 'migrate', target_environment_id: destination.id,
+        target_set_name: destination.set_name, secrets: body,
+      }));
+      pending.current = null;
+      setSecrets([]);
+      setSelectedJob(accepted.id);
+      setJobs(items => [accepted, ...items.filter(item => item.id !== accepted.id)]);
+      await refresh();
+      setNotice('환경 이전을 시작했습니다. 진행 상황은 아래 기록에서 확인하세요.');
+    } catch (e) {
+      report(e);
+      try { await refresh(); } catch { /* 처음 오류와 요청 ID를 유지한다. */ }
+      throw e;
+    } finally { inFlight.current = false; setBusy(false); }
+  }
+  // 환경 이전 뒤 원래 환경에 멈춘 채 남은 앱을 지운다.
+  async function removePrevious() {
+    if (inFlight.current || !target) return;
+    inFlight.current = true; setBusy(true); setError(''); setNotice('');
+    const key = JSON.stringify(['destroy_previous', target.environment_id, target.previous?.app_name]);
+    if (pending.current?.key !== key) pending.current = { key, requestId: crypto.randomUUID() };
+    try {
+      const accepted = await api<Job>(endpoint + '/jobs', mutation(csrf, { request_id: pending.current.requestId, action: 'destroy_previous', secrets: {} }));
+      pending.current = null;
+      setSelectedJob(accepted.id);
+      setJobs(items => [accepted, ...items.filter(item => item.id !== accepted.id)]);
+      await refresh();
+      setNotice('이전 앱 삭제를 시작했습니다. 진행 상황은 아래 기록에서 확인하세요.');
+    } catch (e) {
+      report(e);
+      try { await refresh(); } catch { /* 처음 오류와 요청 ID를 유지한다. */ }
+      throw e;
+    } finally { inFlight.current = false; setBusy(false); }
+  }
   function edit(key: number, change: Partial<Secret>) { setSecrets(items => items.map(item => item.key === key ? { ...item, ...change } : item)); }
   async function lifecycle(action: 'status' | 'rollback') {
     if (inFlight.current || !target) return;
@@ -149,6 +197,7 @@ export function Deployment({ projectId, csrf, mode, onError }: {
 
   if (mode !== 'real') return null;
   const connectable = overview?.environments.filter(item => item.available) ?? [];
+  const candidates: MigrationTarget[] = connectable.filter(item => item.id !== target?.environment_id);
   return <section className="panel mock-deployment" aria-label="배포">
     <div className="panel-heading"><h2><Rocket size={19}/> 배포</h2><span className="mock-badge">{sets[selectedSet]}</span></div>
     <p className="mock-description">{selectedSet === 'onprem' ? '연결이 확인된 내 서버에 앱을 배포하고 공개 주소를 받습니다.' : '연결한 AWS 계정에 이미지를 만들어 올리고 공개 주소를 받습니다. 첫 배포는 서버와 DB를 새로 만드느라 약 20분이 걸릴 수 있습니다.'}</p>
@@ -195,6 +244,16 @@ export function Deployment({ projectId, csrf, mode, onError }: {
             description={target.set_name === 'onprem' ? '이 앱의 컨테이너·볼륨·파일을 삭제합니다. 앱의 데이터도 삭제되므로 필요한 백업을 먼저 확보하세요. 서버와 환경 DNS는 유지됩니다.' : '이 앱의 컨테이너와 서버의 앱 폴더를 지웁니다. 앱 데이터베이스(DB)와 공용 기반(호스트, RDS)은 AWS 계정에 남아 요금이 계속 나옵니다. AnyShip의 프로젝트 연결은 유지되고 다시 배포할 수 있습니다.'}
             onDelete={removeApp}/>
         </div>}
+        {target.deployed && <div className="mock-lifecycle migrate-block" aria-label="환경 이전">
+          {target.previous ? <div className="migrate-previous" role="status">
+            <strong>원래 환경에 멈춘 앱이 남아 있습니다</strong>
+            {target.previous.environment_name} · 앱 {target.previous.app_name}{target.previous.url && <> · 이전 주소 {target.previous.url}</>}
+            <p className="quiet">새 주소에서 앱과 데이터를 확인한 뒤 지워 주세요. 지우기 전에는 다른 환경으로 다시 옮길 수 없습니다.</p>
+            <div className="migrate-previous-actions"><DeleteRegistration label="이전 앱 제거" name={`${target.previous.environment_name} · ${target.previous.app_name}`} disabled={waiting}
+              description="원래 환경에 멈춰 있는 앱의 컨테이너와 데이터를 지웁니다. 되돌릴 수 없으므로 새 주소에서 데이터를 확인한 뒤에만 지우세요. 앱 DB가 AWS의 공용 RDS에 있었다면 DB는 남습니다."
+              onDelete={removePrevious}/></div>
+          </div> : <MigrateEnvironment currentName={target.environment_name} candidates={candidates} secretCount={names.length} disabled={waiting || dirty || !secretsValid} onMigrate={migrateTo}/>}
+        </div>}
       </>}
       <div className="mock-history"><h3>배포 기록 <span>최근 50개</span></h3>
         {!jobs.length ? <p className="quiet">아직 배포한 기록이 없습니다.</p> : <>
@@ -206,7 +265,10 @@ export function Deployment({ projectId, csrf, mode, onError }: {
             {job.result.error && <div className="error" role="alert"><div>{job.result.error.message}{job.result.error.hint && <small>{job.result.error.hint}</small>}</div></div>}
             {job.status === 'succeeded' && job.action === 'destroy' && <p>{job.set_name === 'onprem' ? '앱과 볼륨을 제거했습니다. 서버와 환경 DNS는 유지됩니다.' : '배포를 제거했습니다. 앱 DB와 공용 기반은 남아 있습니다.'}</p>}
             {job.status === 'succeeded' && job.action === 'status' && <p>앱 상태: {job.result.state}</p>}
-            {job.status === 'succeeded' && job.action !== 'destroy' && job.result.url && <p>배포 완료: <a className="deploy-url" href={job.result.url} target="_blank" rel="noopener noreferrer">{job.result.url} <ExternalLink size={13}/></a></p>}
+            {job.status === 'succeeded' && job.action === 'destroy_previous' && <p>이전 환경의 앱을 지웠습니다.</p>}
+            {job.status === 'succeeded' && job.action === 'migrate' && <p>환경 이전을 마쳤습니다{job.result.details?.rows !== undefined && ` (DB 테이블 ${job.result.details.tables}개 · 행 ${job.result.details.rows}개)`}. 원래 앱은 멈춘 채 남아 있으니 새 주소에서 확인한 뒤 지워 주세요.</p>}
+            {job.status === 'failed' && job.action === 'migrate' && job.result.details?.target_left && <p>새 환경에는 앱이 남아 있을 수 있습니다. 다시 옮기면 그 위에 새로 배포하고 DB를 덮어씁니다. 지금 환경의 앱은 계속 사용할 수 있습니다.</p>}
+            {job.status === 'succeeded' && ['deploy', 'rollback', 'migrate'].includes(job.action) && job.result.url && <p>{job.action === 'migrate' ? '새 주소' : '배포 완료'}: <a className="deploy-url" href={job.result.url} target="_blank" rel="noopener noreferrer">{job.result.url} <ExternalLink size={13}/></a></p>}
             <DeploymentLogs key={job.id} logs={job.logs}/>
             {job.status === 'queued' && <p>작업 순서를 기다리고 있습니다.</p>}
           </div>}

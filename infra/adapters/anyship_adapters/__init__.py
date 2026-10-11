@@ -14,6 +14,7 @@ from .models import (
     Secrets,
     Spec,
     StatusResult,
+    TransferResult,
 )
 from .redact import MASK, make_safe_log, redact_event, redact_model, redact_text
 from .sets import AWS_ALWAYS_ON, AWS_SERVERLESS, ONPREM, SET_NAMES, SetName
@@ -46,6 +47,7 @@ __all__ = [
     "Spec",
     "SpecError",
     "StatusResult",
+    "TransferResult",
     "make_safe_log",
     "parse_spec",
     "redact_event",

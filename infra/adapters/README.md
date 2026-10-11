@@ -450,6 +450,38 @@ python scripts/smoke_onprem.py --host <서버 IP> --env-id demo --staging
 python scripts/smoke_onprem.py --host <서버 IP> --env-id dnstest --dns --staging
 ```
 
+## 데이터 이전 (`data_transfer`)
+
+앱의 **DB(PostgreSQL)** 를 한 환경에서 다른 환경으로 옮긴다. 온프레미스 서버에서 AWS로(또는 반대로) 옮길 때 쓰고, S3 같은 중간 저장소는 필요 없다.
+원본 서버의 `pg_dump`를 서비스 서버가 **그대로 중계**해서 대상 서버의 `pg_restore`로 흘려보낸다(이미지를 보내는 `docker save | docker load`와 같은 방식).
+디스크나 메모리에 덤프를 모으지 않는다. 대신 서비스 서버의 네트워크를 지나가므로 작은 DB용이다(기본 한도 1 GiB, `max_bytes`).
+
+```python
+result = deployer.transfer_data(onprem_env, aws_env, "todo", log,
+                                source_set="onprem", target_set="aws-always-on")
+# result.ok, result.details == {"bytes": ..., "tables": ..., "rows": ..., "source_stopped": True}
+```
+
+**호출 전에 할 일**: 대상 환경에 같은 앱을 먼저 배포한다(빈 DB로). 복원은 `--clean --if-exists`라서 대상의 기존 테이블을 원본의 것으로 바꾼다.
+
+| 순서 | 단계 | 하는 일 |
+|---|---|---|
+| 1 | 준비 확인 | 두 서버에 접속, 앱이 둘 다 있는지, 원본 DB 크기(한도), 대상 DB 접속 |
+| 2 | 쓰기 중지 | 두 환경의 **웹 컨테이너만** 멈춘다(DB는 켜 둔다). 멈춘 것은 실패하면 모두 되돌린다 |
+| 3 | 데이터 복사 | `pg_dump --format=custom --no-owner --no-privileges` → `pg_restore --clean --if-exists --single-transaction` |
+| 4 | 검증 | 테이블별 `count(*)`를 원본과 대상에서 세어 비교한다 |
+| 5 | 마무리 | 대상 앱을 시작한다. **원본 앱은 멈춘 채로 둔다**(`source_stopped`). 사용자가 새 주소에서 확인한 뒤 원본을 지우고, 문제가 있으면 원본을 다시 켠다 |
+
+- 복원은 한 트랜잭션이라 **실패하면 대상 DB는 그대로**이고, 원본 앱은 다시 시작한다. 데이터는 옮겼는데 대상 앱이 시작되지 못하면 원본이 다시 서게 한다(양쪽이 모두 멈추지 않게). 행 수가 맞지 않으면 원본을 다시 켜고 의심스러운 대상 앱은 멈춘 채로 둔다.
+- **옮기지 않는 것**: 컨테이너 볼륨의 파일, 환경마다 따로 생성되는 비밀 값(`SECRET_KEY` 등, 옮기면 기존 로그인 세션이 풀린다), 앱 주소(환경이 다르면 주소도 다르다. `<앱>.<환경ID>.<aws|onprem>.<도메인>`).
+- **비밀은 명령줄에 쓰지 않는다.** 온프레미스는 `db` 컨테이너 안에서 소켓으로 접속하고, RDS는 호스트의 `app.env`를 읽어 `DATABASE_URL`을 환경변수로만 컨테이너에 넘긴다(`rds_admin`과 같은 원칙). SQL은 표준 입력으로 보낸다.
+- 어댑터는 `data_endpoint(env, app)`로 접속 방법을 돌려준다(`OnpremAdapter`는 `db` 컨테이너, `AwsAlwaysOnAdapter`는 공용 RDS). 두 환경이 이 메서드를 가지면 어느 방향이든 옮길 수 있다.
+- 두 PostgreSQL 버전은 호환되어야 한다(지금 온프레미스 `db`는 16, RDS는 16 계열이다). 새 세트를 추가할 때 이 점을 확인한다.
+
+`Deployer.check_transfer_source(env, app, log, set_name=...)`는 옮기기 전에 원본만 미리 확인한다(접속, 앱, DB 크기. 아무것도 멈추지 않는다). 서비스는 이것으로 대상을 새로 배포하기 *전에* 옮길 수 없는 DB를 걸러낸다.
+
+서비스 연결은 `service/README.md`의 "환경 이전"을 본다(작업 종류 `migrate`, `destroy_previous`, 화면 버튼). 아직 없는 것: 성공 뒤 "원본 앱 다시 켜기"(되돌리기) 버튼.
+
 ## 오류 코드 (현재)
 
 mock이 내는 코드이고, 실제 어댑터가 생기면 더 늘어납니다
@@ -465,6 +497,15 @@ mock이 내는 코드이고, 실제 어댑터가 생기면 더 늘어납니다
 | `app_not_found` | 배포되지 않은 앱을 되돌리려 함 | 아니요 |
 | `container_start_failed` | 새 컨테이너가 시작되지 않음 | 예 |
 | `healthcheck_failed` | 앱이 `/healthz`에 응답하지 않음 | 예 |
+| `app_not_found` | (이전) 원본이나 대상에 앱이 배포되어 있지 않음 | 아니요 |
+| `db_too_large` | 원본 DB가 한도(`max_bytes`)보다 큼 | 아니요 |
+| `source_db_unavailable`, `target_db_unavailable` | 원본이나 대상 DB에 접속하지 못함 | 예 |
+| `quiesce_failed` | 쓰기를 막으려고 앱을 멈추지 못함 | 예 |
+| `dump_failed`, `restore_failed`, `restore_timeout` | 내보내기나 복원이 실패(복원 실패면 대상은 그대로) | 예 |
+| `verify_failed`, `verify_mismatch` | 행 수를 확인하지 못했거나 원본과 다름(대상 앱은 멈춘 채로 둠) | 예 |
+| `target_start_failed` | 데이터는 옮겼지만 대상 앱을 시작하지 못함(원본 앱을 다시 시작한다) | 예 |
+| `same_environment`, `transfer_not_supported` | 원본과 대상이 같거나, 이전을 지원하지 않는 조합 | 아니요 |
+| `transfer_pipeline_error` | 예상하지 못한 오류(내용은 로그에 싣지 않는다) | 예 |
 
 ## mock 어댑터
 
@@ -518,3 +559,4 @@ python -m pytest infra/adapters
   재배포마다 다시 넘기지 않아도 되게 하려면 필요
 - 환경별 SSH 키, 앱 삭제 때 앱 DB 삭제 같은 확장 항목
 - 오류 코드 추가
+- 데이터 이전을 실제 환경에서 시험: `scripts/smoke_transfer.py`(진짜 Postgres, 서비스 서버에서)와 서버 두 대(SSH 중계, RDS 쪽 명령). 서비스 연결(작업 종류 `transfer`, 화면)
