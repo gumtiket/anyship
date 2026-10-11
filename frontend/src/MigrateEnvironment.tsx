@@ -56,8 +56,8 @@ export function MigrateEnvironment({ currentName, candidates, secretCount, disab
         <p className="migrate-limits">옮겨지는 것은 <strong>앱의 DB</strong>뿐입니다. 서버에 저장한 파일은 옮겨지지 않고, 앱의 비밀 키는 환경마다 새로 만들어져 기존 로그인 세션이 풀립니다.
           공개 주소가 바뀌며, 앱에 필요한 비밀 값은 다시 보내야 합니다{secretCount > 0 ? ` (입력한 ${secretCount}개를 함께 보냅니다)` : ' (입력한 값이 없습니다)'}.
           중간에 실패해도 지금 환경의 앱은 다시 시작되지만, 새 환경에는 앱이 남아 있을 수 있습니다.</p>
-        <label className="migrate-ack"><input type="checkbox" checked={understood} disabled={busy} onChange={event => setUnderstood(event.target.checked)}/> 위 내용을 확인했습니다</label>
       </div>
+      <label className="migrate-ack"><input type="checkbox" checked={understood} disabled={busy} onChange={event => setUnderstood(event.target.checked)}/><span>이전하시겠습니까?</span></label>
       {error && <div className="error" role="alert">{error}</div>}
       <div className="delete-dialog-actions">
         <button type="button" className="secondary" autoFocus disabled={busy} onClick={() => dialog.current?.close()}>취소</button>
