@@ -136,3 +136,7 @@ class StatusResult(Result):
 
 class DestroyResult(Result):
     pass
+
+
+class TransferResult(Result):
+    """앱 데이터(DB)를 한 환경에서 다른 환경으로 옮긴 결과. details에 옮긴 바이트 수와 테이블 수가 담긴다."""

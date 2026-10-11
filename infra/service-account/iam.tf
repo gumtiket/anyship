@@ -54,7 +54,9 @@ resource "aws_iam_role_policy" "assume_deploy_role" {
     Statement = [{
       Effect   = "Allow"
       Action   = "sts:AssumeRole"
-      Resource = "arn:aws:iam::*:role/deploy-service-role"
+      # The trailing * lets the service assume per-environment roles (`deploy-service-role-<id>`, APP_AWS_ROLE_NAME with {id}),
+      # so one AWS account can hold several environments. Without it only the exact name `deploy-service-role` works.
+      Resource = "arn:aws:iam::*:role/deploy-service-role*"
     }]
   })
 }

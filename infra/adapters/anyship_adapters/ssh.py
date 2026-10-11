@@ -69,11 +69,13 @@ class SshRunner:
         connection: SshConnection,
         *,
         runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        popen: Callable[..., subprocess.Popen] = subprocess.Popen,
         connect_timeout: int = 10,
         known_hosts: Path | None = None,
     ):
         self.connection = connection
         self._runner = runner  # 시험에서는 가짜 실행기로 바꿔 끼운다
+        self._popen = popen
         self._connect_timeout = connect_timeout
         self._known_hosts = known_hosts
 
@@ -108,6 +110,14 @@ class SshRunner:
         except subprocess.TimeoutExpired as exc:
             return CommandResult(124, _text(exc.stdout), _text(exc.stderr), timed_out=True)
         return CommandResult(done.returncode, _text(done.stdout), _text(done.stderr))
+
+    def popen(self, args: Sequence[str]) -> subprocess.Popen:
+        """원격 명령을 시작하고 표준 출력과 오류를 파이프로 돌려준다. 아주 큰 출력(DB 덤프)을 메모리에 모으지 않고
+        다른 서버의 표준 입력으로 그대로 흘려보낼 때 쓴다. 기다리고 정리하는 것은 호출하는 쪽의 몫이다."""
+        if not args or any("\0" in arg for arg in args):
+            raise ValueError("invalid remote command")
+        return self._popen(self._command(args), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           stdin=subprocess.DEVNULL, env=safe_env())
 
     def put(self, remote_path: str, data: str | bytes, *, mode: str = "0644",
             timeout: float = 30) -> CommandResult:

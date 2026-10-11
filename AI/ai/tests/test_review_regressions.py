@@ -83,17 +83,16 @@ def test_sensitive_ignore_input_and_uppercase_env_are_not_exported(tmp_path):
     assert all(REVIEW_SECRET not in file.read_text() for file in (tmp_path / "out").iterdir())
 
 
-def test_existing_database_url_is_user_secret_without_guessed_database(tmp_path):
+def test_existing_database_url_without_database_evidence_blocks_packaging(tmp_path):
     path = repo(
         tmp_path,
         "import os\nfrom sqlalchemy import create_engine\n"
         'engine=create_engine(os.environ["DATABASE_URL"])\n',
     )
     result = analyze(path, tmp_path / "out")
-    assert all(e.name != "DATABASE_URL" for e in result.deploy_spec.env)
-    assert "environment_name_forbidden" in {w.code for w in result.transformation.warnings}
-    assert not result.deploy_spec.backing_services
-    assert "external_resource_required" in result.recommendation.needs_confirmation
+    assert result.deploy_spec is None and result.status == "failed"
+    assert "postgres_binding_unresolved" in {w.code for w in result.packaging_warnings}
+    assert "deployment_contract" in result.recommendation.needs_confirmation
 
 
 def test_existing_secret_key_is_not_generated_even_when_another_secret_is_extracted(tmp_path):

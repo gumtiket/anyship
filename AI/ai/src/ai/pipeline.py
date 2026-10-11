@@ -24,6 +24,7 @@ from ai.security import SourceMasker
 from ai.spec.cost_table import CostAssumptions
 from ai.spec.env_policy import APP_NAME, app_name_from_directory
 from ai.spec.recommend import recommend
+from ai.spec.resources import ResourceContractError
 from ai.spec.service import generate_spec
 from ai.spec.tfvars_schema import CommonVars
 from ai.stages import LogFn, Stage, default_log
@@ -229,6 +230,7 @@ def run_analysis(
     spec = None
     build_context = None
     packaging_warnings = []
+    packaging_failed = False
     with ExitStack() as stack:
         clients = []
         for client in (llm, artifact_llm, decision_llm, repair_llm):
@@ -259,16 +261,23 @@ def run_analysis(
                 dockerfile, docker_fallback = generate_dockerfile(
                     framework.entrypoint, artifact_tracked
                 )
-                spec, spec_fallback = generate_spec(
-                    app_name or app_name_from_directory(repo.name),
-                    source_repo or f"local://{app_name or app_name_from_directory(repo.name)}",
-                    commit,
-                    profile,
-                    diagnosis,
-                    transformation,
-                    artifact_tracked,
-                    max_request_seconds=max_request_seconds,
-                )
+                try:
+                    spec, spec_fallback = generate_spec(
+                        app_name or app_name_from_directory(repo.name),
+                        source_repo or f"local://{app_name or app_name_from_directory(repo.name)}",
+                        commit,
+                        profile,
+                        diagnosis,
+                        transformation,
+                        artifact_tracked,
+                        max_request_seconds=max_request_seconds,
+                        repo=view,
+                    )
+                except ResourceContractError as error:
+                    packaging_failed = True
+                    spec_fallback = False
+                    dockerfile = "# unsupported: 배포 자원 검증 실패로 생성 보류\n"
+                    packaging_warnings.append(WarningItem(code=error.code, message=error.message))
                 for code, fallback in (
                     ("dockerfile_llm_fallback", docker_fallback),
                     ("spec_llm_fallback", spec_fallback),
@@ -282,9 +291,9 @@ def run_analysis(
                                 ),
                             )
                         )
-                if transformation.sample_name and not masker.blocked_files:
+                if spec is not None and transformation.sample_name and not masker.blocked_files:
                     build_context = prepare_context(view, diff, dockerfile)
-                else:
+                elif spec is not None:
                     packaging_warnings.append(
                         WarningItem(
                             code="build_context_skipped",
@@ -320,7 +329,9 @@ def run_analysis(
                 if spec is not None
                 else Recommendation(
                     status="unsupported",
-                    needs_confirmation=["dependency_packaging"],
+                    needs_confirmation=[
+                        "deployment_contract" if packaging_failed else "dependency_packaging"
+                    ],
                     needs_approval=transformation.needs_approval,
                     warnings=list(transformation.warnings),
                 )
@@ -391,7 +402,7 @@ def run_analysis(
     output.mkdir(parents=True, exist_ok=True)
     result = AnalysisResult(
         status="failed"
-        if transformation.status == "failed" or gate.status == "failed"
+        if transformation.status == "failed" or gate.status == "failed" or packaging_failed
         else "partial"
         if diagnosis.enrichment_status == "failed"
         or (framework.support_grade == "supported" and spec is None)

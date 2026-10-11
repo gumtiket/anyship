@@ -15,6 +15,7 @@ from .base import LogFn
 from .compose import render_stack
 from .compose_adapter import ComposeAdapter, _err, _ssh_error, _step
 from .compose_host import ComposeHost, wait_healthy
+from .data_transfer import ComposeDbEndpoint
 from .dns import DnsError, WildcardRecords
 from .models import (AdapterError, CheckResult, DeployResult, DestroyResult, LogEvent, OnpremEnvironment,
                      Secrets, Spec)
@@ -33,6 +34,11 @@ class OnpremAdapter(ComposeAdapter):
 
     def _address(self, env: OnpremEnvironment, app: str) -> str:
         return f"{app}.{env.env_id}.onprem.{self._domain}"
+
+    def data_endpoint(self, env: OnpremEnvironment, app: str) -> ComposeDbEndpoint:
+        """앱의 DB에 닿는 방법(앱 전용 db 컨테이너). 데이터 이전이 쓴다."""
+        ssh, host = self._connect(env)
+        return ComposeDbEndpoint(ssh, host, app)
 
     def check(self, env: OnpremEnvironment, log: LogFn) -> CheckResult:
         ssh, _ = self._connect(env)

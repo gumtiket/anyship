@@ -11,7 +11,7 @@ import time
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from .db import AwsEnvironment, DeployJob, Deployment, OnpremEnvironment
@@ -19,7 +19,7 @@ from .deploy_state import assign_env_id
 
 LEASE_SECONDS = 30 * 60
 ACTIVE = ("queued", "running")
-ACTIONS = ("deploy", "destroy", "status", "rollback")
+ACTIONS = ("deploy", "destroy", "status", "rollback", "migrate", "destroy_previous")
 REAL_SETS = ("aws-always-on", "onprem")
 MAX_EVENTS, KEEP_FIRST, MAX_MESSAGE = 400, 100, 500
 OMITTED = "(중간 로그 일부 생략)"
@@ -92,10 +92,12 @@ def find_request(session, project_id: str, request_id, action: str):
 
 
 def claim(session, project_id: str, request_id, runtime_id: str, *, action: str = "deploy", image_tag: str = "",
-          now: int | None = None):
+          now: int | None = None, extra_onprem_environment_ids: tuple[str, ...] = ()):
     """배포 또는 삭제 작업을 만들고 선점한다. (작업, 새로 만들었는지). 같은 요청 ID가 다시 오면 기존 작업을 돌려준다.
 
-    삭제(`destroy`)는 배포된 적이 있을 때만 할 수 있다. 작업 기록의 image_tag에는 지우는 버전이 남는다."""
+    삭제(`destroy`)는 배포된 적이 있을 때만 할 수 있다. 작업 기록의 image_tag에는 지우는 버전이 남는다.
+    환경 이전(`migrate`)은 배포된 앱이 있고 원래 환경에 멈춘 앱이 남아 있지 않을 때만, 이전 앱 삭제(`destroy_previous`)는 멈춘 앱이 남아 있을 때만
+    할 수 있다. 작업이 함께 만지는 다른 온프레미스 환경(이전 대상, 지울 이전 환경)은 `extra_onprem_environment_ids`로 같이 선점한다."""
     if action not in ACTIONS:
         raise ValueError("action must be one of " + ", ".join(ACTIONS))
     created_ms = int(time.time() * 1000) if now is None else now * 1000  # 같은 초에 만든 작업도 순서가 갈리도록 밀리초로 기록한다
@@ -111,6 +113,13 @@ def claim(session, project_id: str, request_id, runtime_id: str, *, action: str 
             raise _error("not_deployed", "배포된 앱이 없어 지울 것이 없습니다.")
         if action != "rollback":
             image_tag = target.image_tag
+    if action == "migrate":
+        if not target.image_tag:
+            raise _error("not_deployed", "배포된 앱이 있어야 다른 환경으로 옮길 수 있습니다.")
+        if target.previous_app_name:
+            raise _error("previous_app_remaining", "이전 환경에 멈춘 앱이 남아 있습니다. 먼저 지운 뒤 다시 옮길 수 있습니다.")
+    if action == "destroy_previous" and not target.previous_app_name:
+        raise _error("no_previous_app", "지울 이전 환경의 앱이 없습니다.")
     if target.active_job_id and target.lease_until <= now:  # 만료된 선점: 죽은 작업을 중단으로 정리한다
         session.execute(update(DeployJob).where(DeployJob.id == target.active_job_id, DeployJob.status.in_(ACTIVE)).values(
             status="interrupted", finished_at=now * 1000,
@@ -119,6 +128,9 @@ def claim(session, project_id: str, request_id, runtime_id: str, *, action: str 
     if target.onprem_environment_id:
         from .onprem_state import acquire
         acquire(session, target.onprem_environment_id, identifier, now)
+    for environment_id in extra_onprem_environment_ids:
+        from .onprem_state import acquire
+        acquire(session, environment_id, identifier, now)
     claimed = session.execute(update(Deployment).where(
         Deployment.project_id == project_id, or_(Deployment.active_job_id.is_(None), Deployment.lease_until <= now),
     ).values(active_job_id=identifier, lease_until=now + LEASE_SECONDS))
@@ -147,10 +159,11 @@ def extend_lease(session, job_id: str, *, now: int | None = None) -> None:
 
 
 def finish(session, job_id: str, *, ok: bool, result: dict, stage: str = "", deployed: dict | None = None,
-           now: int | None = None) -> bool:
+           now: int | None = None, changes: dict | None = None) -> bool:
     """작업을 끝내고 선점을 풀며, 성공이면 배포 상태(`deployed`: image_tag, url, app_name)를 반영한다. 이미 끝났거나 중단된 작업이면 False.
 
-    배포를 지운 작업은 `deployed`에 빈 문자열 세 개를 넘겨 "아직 배포하지 않음"으로 되돌린다."""
+    배포를 지운 작업은 `deployed`에 빈 문자열 세 개를 넘겨 "아직 배포하지 않음"으로 되돌린다.
+    `changes`는 성공했을 때 배포 기록의 다른 열을 함께 바꾼다(환경 이전의 대상 교체와 이전 앱 기록). 실패하면 적용하지 않는다."""
     now = int(time.time()) if now is None else now
     done = session.execute(update(DeployJob).where(DeployJob.id == job_id, DeployJob.status.in_(ACTIVE)).values(
         status="succeeded" if ok else "failed", stage=stage, finished_at=now * 1000,
@@ -161,6 +174,8 @@ def finish(session, job_id: str, *, ok: bool, result: dict, stage: str = "", dep
     values = {"active_job_id": None, "lease_until": 0}
     if ok and deployed:
         values.update(image_tag=deployed["image_tag"], url=deployed["url"], app_name=deployed["app_name"])
+    if ok and changes:
+        values.update(changes)
     session.execute(update(Deployment).where(Deployment.active_job_id == job_id).values(**values))
     from .onprem_state import release
     release(session, job_id)
@@ -190,9 +205,12 @@ def clear_real_targets(session, *, project_id: str | None = None, environment_id
     서비스의 기록만 지운다. 사용자 계정에 배포된 앱과 기반은 건드리지 않는다. 진행 중인 작업이 있으면 지우지 않는다."""
     now = int(time.time()) if now is None else now
     if environment_id is not None:
-        if session.scalar(select(Deployment.project_id).where(Deployment.aws_environment_id == environment_id)):
+        if session.scalar(select(Deployment.project_id).where(or_(Deployment.aws_environment_id == environment_id, and_(
+                Deployment.previous_environment_id == environment_id, Deployment.previous_app_name != "")))):
             raise HTTPException(409, {"code": "environment_in_use", "message": "배포 대상으로 사용 중인 환경입니다. 프로젝트의 배포 기록을 먼저 정리해 주세요."})
     if project_id is not None:
+        if session.scalar(select(Deployment.project_id).where(Deployment.project_id == project_id, Deployment.previous_app_name != "")):
+            raise HTTPException(409, {"code": "previous_app_remaining", "message": "이전 환경에 멈춘 앱이 남아 있습니다. 먼저 지운 뒤 프로젝트 연결을 삭제하세요."})
         if session.scalar(select(Deployment.project_id).where(Deployment.project_id == project_id,
             Deployment.onprem_environment_id.is_not(None), Deployment.app_name != "")):
             raise HTTPException(409, {"code": "onprem_app_remaining", "message": "온프레미스 앱을 먼저 제거한 뒤 프로젝트 연결을 삭제하세요."})
