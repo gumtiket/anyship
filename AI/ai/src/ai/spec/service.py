@@ -5,6 +5,7 @@ from typing import Literal
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
+from ai.detectors.repo import RepoView
 from ai.llm.base import LLMClient
 from ai.models import Diagnosis, TransformReport, WarningItem
 from ai.security import credential_name
@@ -18,6 +19,7 @@ from ai.spec.models import (
     SpecProposal,
     Workload,
 )
+from ai.spec.resources import resolve_resources
 
 
 def validate_spec(spec: DeploySpec) -> None:
@@ -38,6 +40,7 @@ def generate_spec(
     llm: LLMClient | None,
     *,
     max_request_seconds: int = 10,
+    repo: RepoView | None = None,
 ) -> tuple[DeploySpec, bool]:
     proposal = SpecProposal()
     fallback = False
@@ -63,9 +66,13 @@ def generate_spec(
         or proposal.scale_to_zero != (not persistent)
     ):
         fallback = True
-    postgres = any(
-        v.rule == "sqlite_usage" and v.id in transformation.addressed_ids
-        for v in diagnosis.violations
+    postgres, migrate = resolve_resources(
+        repo,
+        transformation,
+        converted_postgres=any(
+            v.rule == "sqlite_usage" and v.id in transformation.addressed_ids
+            for v in diagnosis.violations
+        ),
     )
     env = []
     for variable in transformation.env_vars:
@@ -132,9 +139,9 @@ def generate_spec(
             continue
         env.append(setting)
     release = None
-    if transformation.migrate_command:
+    if migrate:
         try:
-            release = Release(migrate=transformation.migrate_command)
+            release = Release(migrate=migrate)
         except ValidationError:
             transformation.warnings.append(
                 WarningItem(

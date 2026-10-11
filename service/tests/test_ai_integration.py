@@ -345,6 +345,39 @@ def test_process_cancellation_terminates_child(tmp_path):
     (tmp_path / 'events.jsonl').unlink()
 
 
+@pytest.mark.parametrize('provider', ['none', 'fake'])
+@pytest.mark.parametrize('binding', ['postgres', 'unknown', 'invalid'])
+def test_reanalysis_keeps_database_contract_or_blocks_pr_files(tmp_path, provider, binding):
+    import yaml
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    (repo / 'main.py').write_text('import os\nfrom fastapi import FastAPI\napp = FastAPI()\n'
+                                'DATABASE_URL = os.environ["DATABASE_URL"]\n')
+    (repo / 'requirements.txt').write_text('fastapi==0.115.12\nuvicorn==0.34.2\n')
+    original = ('backing_services:\n- type: postgres\n  bind_as: DATABASE_URL\n'
+                'release:\n  migrate: alembic upgrade head\n')
+    if binding == 'invalid':
+        original = 'backing_services: [\n'
+    if binding != 'unknown':
+        (repo / 'deploy-spec.yaml').write_text(original)
+    request = {'provider': provider, 'base_sha': BASE, 'source_repo': f'https://github.com/{NAME}',
+               'app_name': 'fixture-app', 'target_env': 'onprem', 'max_calls': 12}
+    result = ProcessAIProvider(SimpleNamespace(ai_timeout=60)).run(
+        tmp_path, request, lambda _: None, lambda: False)
+    if binding == 'postgres':
+        assert result.report['adapter_compatible']
+        spec = yaml.safe_load(next(f.content for f in result.files if f.path == 'deploy-spec.yaml'))
+        assert spec['backing_services'] == [{'type': 'postgres', 'bind_as': 'DATABASE_URL'}]
+        assert spec['release']['migrate'] == 'alembic upgrade head'
+        assert (repo / 'deploy-spec.yaml').read_text() == original
+    else:
+        assert result.report['status'] == 'failed'
+        assert not result.report['adapter_compatible']
+        assert result.files == []
+        assert result.report['packaging_warnings']
+
+
 def test_real_pipeline_through_snapshot_review_and_git_api(connected):
     app, _, remote, _, _, _ = connected
     sample = Path(__file__).resolve().parents[2] / 'AI/samples/todo'
