@@ -114,7 +114,7 @@ class DeployRunner:
             if not check(Path(path)):
                 raise RuntimeError(f"{name} does not point to an existing {'folder' if check is Path.is_dir else 'file'}.")
         adapter = AwsAlwaysOnAdapter(settings.deploy_ssh_key, base_domain=settings.deploy_base_domain,
-                                     verify_tls=settings.deploy_verify_tls)
+                                     verify_tls=settings.deploy_verify_tls, dns_managed=bool(settings.deploy_dns))
         runner = TerraformRunner(settings.deploy_terraform_dir, plugin_cache_dir=settings.deploy_plugin_cache)
         foundation = FoundationSettings(settings.deploy_service_ip, _public_key(settings.deploy_ssh_key),
                                         settings.deploy_acme_email)

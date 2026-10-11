@@ -171,6 +171,20 @@ def test_deploy_says_the_dns_record_must_exist_instead_of_pretending_to_check_it
     assert all(name != "DNS 확인" for _, _, name in log.steps())
 
 
+def test_when_the_service_manages_dns_the_log_does_not_claim_it_must_be_created_by_hand():
+    # 서비스가 DNS를 자동으로 맞추는데 "미리 만들어 두어야 합니다(자동 생성 안 함)"이라고 알리면 사실과 달라 원인 파악을 흐린다
+    srv = AwsServer(responses={})
+    ssh = SshRunner(SshConnection("203.0.113.5", Path("/key")), runner=srv)
+    adapter = AwsAlwaysOnAdapter(Path("/key"), connect=lambda env: (ssh, ComposeHost(ssh, popen=srv.popen)),
+                                 healthy=Health(), access=Access(), dns_managed=True)
+    log = Log()
+    assert deploy(adapter, log=log).ok
+    assert not [e for e in log.events if e.level == "warn" and "DNS" in e.message]
+    notes = [e.message for e in log.events if "DNS" in e.message]
+    assert len(notes) == 1 and "자동으로" in notes[0] and "todo.test.aws.anyship.cloud" in notes[0]
+    assert "미리 만들어" not in " ".join(e.message for e in log.events)
+
+
 def test_redeploying_keeps_the_app_password_and_the_generated_secret_key():
     adapter, srv, _, _ = setup()
     deploy(adapter, V1)
